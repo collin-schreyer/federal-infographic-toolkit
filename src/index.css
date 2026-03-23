@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#f9fafb] text-zinc-900 font-sans antialiased selection:bg-zinc-800 selection:text-white;
+  }
+}
+
+@layer utilities {
+  .liquid-glass {
+    @apply backdrop-blur-md bg-white/70 border border-white/20 shadow-[inset_0_1px_0_rgba(255, 255, 255, 0.4)];
+  }
+}
+
+@keyframes spin-burst {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(1080deg);
+  }
+}
+
+.animate-spin-burst {
+  animation: spin-burst 3s cubic-bezier(0.76, 0, 0.24, 1) infinite;
+}
