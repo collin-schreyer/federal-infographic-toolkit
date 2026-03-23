@@ -23,6 +23,10 @@ const API_KEY = import.meta.env.VITE_GOOGLE_GEMINI_API_KEY || "";
 
 export default function App() {
   const [isStarted, setIsStarted] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [usernameInput, setUsernameInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [authError, setAuthError] = useState('');
 
   const [topic, setTopic] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -283,6 +287,49 @@ export default function App() {
 
   if (!isStarted) {
     return <Landing onStart={() => setIsStarted(true)} />;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-[100dvh] w-full flex items-center justify-center bg-zinc-50 font-sans p-4 relative overflow-hidden">
+        {/* Background Decor */}
+        <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-zinc-200 rounded-full blur-3xl opacity-20 transform translate-x-1/2 -translate-y-1/2"></div>
+        <div className="absolute bottom-0 left-0 w-[600px] h-[600px] bg-zinc-200 rounded-full blur-3xl opacity-20 transform -translate-x-1/2 translate-y-1/3"></div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ type: "spring", stiffness: 100, damping: 20 }}
+          className="bg-white border border-zinc-200 shadow-xl rounded-2xl p-8 md:p-10 max-w-sm w-full flex flex-col gap-6 z-10"
+        >
+          <div className="flex flex-col items-center gap-3 text-center">
+            <img src="/BA-logo-black.png" alt="B&A Authentication" className="h-10 w-auto opacity-90 object-contain mb-2" />
+            <h1 className="text-xl font-bold tracking-tight text-zinc-950 leading-tight">Federal Infographic Toolkit</h1>
+            <p className="text-xs text-zinc-500 font-medium">Please authenticate to access the generation engine.</p>
+          </div>
+
+          {authError && <div className="text-[11px] font-bold text-red-600 bg-red-50 p-3 rounded-lg border border-red-100 text-center">{authError}</div>}
+
+          <form className="flex flex-col gap-4" onSubmit={(e) => {
+            e.preventDefault();
+            if (usernameInput === 'admin' && passwordInput === 'BAinfographic2026!') {
+              setIsAuthenticated(true);
+              setAuthError('');
+            } else {
+              setAuthError('Invalid credentials. Access denied.');
+            }
+          }}>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">Username</label>
+              <input type="text" value={usernameInput} onChange={(e) => setUsernameInput(e.target.value)} className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px] font-medium focus:outline-none focus:ring-2 focus:ring-zinc-950/20" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">Password</label>
+              <input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px] font-medium focus:outline-none focus:ring-2 focus:ring-zinc-950/20" />
+            </div>
+            <button type="submit" className="w-full py-3 bg-zinc-950 text-white font-bold text-[13px] tracking-wide rounded-lg hover:bg-zinc-800 transition-all mt-2 shadow-md hover:shadow-lg hover:-translate-y-px">Authenticate</button>
+          </form>
+        </motion.div>
+      </div>
+    );
   }
 
   return (
