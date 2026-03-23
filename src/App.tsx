@@ -14,7 +14,8 @@ import {
   Faders,
   FrameCorners,
   Eye,
-  Shapes
+  Shapes,
+  CaretLeft
 } from '@phosphor-icons/react';
 
 import Landing from './Landing';
@@ -344,12 +345,21 @@ export default function App() {
           className="flex flex-col h-full"
         >
           {/* Header */}
-          <div className="flex items-center gap-3 mb-10">
-            <img src="/BA-logo-black.png" alt="B&A Logo" className="h-8 w-auto object-contain mix-blend-multiply opacity-90" />
-            <div className="border-l border-zinc-300 pl-3 py-0.5">
-              <h1 className="text-sm font-bold tracking-tight text-zinc-950 uppercase leading-none mb-1">Federal Infographic Toolkit</h1>
-              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest leading-none">Compliance & Proposals</p>
+          <div className="flex items-center justify-between mb-10">
+            <div className="flex items-center gap-3">
+              <img src="/BA-logo-black.png" alt="B&A Logo" className="h-8 w-auto object-contain mix-blend-multiply opacity-90" />
+              <div className="border-l border-zinc-300 pl-3 py-0.5">
+                <h1 className="text-sm font-bold tracking-tight text-zinc-950 uppercase leading-none mb-1">Federal Infographic Toolkit</h1>
+                <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest leading-none">Compliance & Proposals</p>
+              </div>
             </div>
+            <button
+              onClick={() => { setIsStarted(false); setIsAuthenticated(false); }}
+              className="text-zinc-400 hover:text-zinc-950 hover:bg-zinc-100 p-1.5 rounded-lg transition-all flex items-center justify-center group border border-transparent hover:border-zinc-200"
+              title="Return to Home Screen"
+            >
+              <CaretLeft className="w-5 h-5 group-hover:-translate-x-0.5 transition-transform" />
+            </button>
           </div>
 
           <div className="flex-grow">
