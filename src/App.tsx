@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { generateInfographicImage } from './lib/gemini';
+import { generateInfographicImage as generateGeminiImage } from './lib/gemini';
+import { generateInfographicImage as generateOpenAIImage } from './lib/openai';
 import {
   PaperPlaneTilt,
   CircleNotch,
@@ -15,12 +16,16 @@ import {
   FrameCorners,
   Eye,
   Shapes,
-  CaretLeft
+  CaretLeft,
+  Cpu
 } from '@phosphor-icons/react';
 
 import Landing from './Landing';
 
-const API_KEY = import.meta.env.VITE_GOOGLE_GEMINI_API_KEY || "";
+const GEMINI_API_KEY = import.meta.env.VITE_GOOGLE_GEMINI_API_KEY || "";
+const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY || "";
+
+type ImageModel = 'openai' | 'gemini';
 
 export default function App() {
   const [isStarted, setIsStarted] = useState(false);
@@ -50,6 +55,11 @@ export default function App() {
   const [accessibility, setAccessibility] = useState('High Contrast Legibility Mode');
   const [iconography, setIconography] = useState('USWDS Standard Icons');
   const [isTransparent, setIsTransparent] = useState(false);
+  const [imageModel, setImageModel] = useState<ImageModel>('openai');
+
+  const activeApiKey = imageModel === 'openai' ? OPENAI_API_KEY : GEMINI_API_KEY;
+  const activeKeyName = imageModel === 'openai' ? 'VITE_OPENAI_API_KEY' : 'VITE_GOOGLE_GEMINI_API_KEY';
+  const generateInfographicImage = imageModel === 'openai' ? generateOpenAIImage : generateGeminiImage;
 
   const colorFileInputRef = useRef<HTMLInputElement>(null);
   const logoFileInputRef = useRef<HTMLInputElement>(null);
@@ -73,9 +83,9 @@ export default function App() {
   ];
 
   const orientations = [
-    { label: '11x8.5 Landscape', value: '11x8.5 Landscape' },
-    { label: '8.5x11 Portrait', value: '8.5x11 Portrait' },
-    { label: '11x17 Foldout', value: '11x17 Foldout' },
+    { label: '11x8.5 Landscape', value: '11x8.5 Landscape', desc: 'Wide page' },
+    { label: '8.5x11 Portrait', value: '8.5x11 Portrait', desc: 'Tall page' },
+    { label: '11x17 Foldout', value: '11x17 Foldout', desc: 'Tabloid spread' },
   ];
 
   const accessibilities = [
@@ -216,7 +226,7 @@ export default function App() {
 
       const newImgUrl = await generateInfographicImage(
         topic,
-        API_KEY,
+        activeApiKey,
         payloadColors,
         selectedFont,
         headerLogo,
@@ -247,7 +257,7 @@ export default function App() {
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!topic.trim() || !API_KEY) return;
+    if (!topic.trim() || !activeApiKey) return;
 
     setIsLoading(true);
     setGeneratedImages([]);
@@ -263,7 +273,7 @@ export default function App() {
       const promises = [1, 2, 3].map(() =>
         generateInfographicImage(
           topic,
-          API_KEY,
+          activeApiKey,
           payloadColors,
           selectedFont,
           headerLogo,
@@ -373,6 +383,35 @@ export default function App() {
             {/* Input Form */}
             <form onSubmit={handleGenerate} className="flex flex-col gap-8">
 
+              {/* Model Router */}
+              <div className="flex flex-col gap-3">
+                <label className="text-[13px] font-semibold text-zinc-900 tracking-wide uppercase flex items-center gap-2">
+                  <Cpu className="w-4 h-4 text-zinc-500" /> Rendering Engine
+                </label>
+                <div className="flex gap-2">
+                  {([
+                    { value: 'openai', label: 'GPT-Image', desc: 'OpenAI (default)' },
+                    { value: 'gemini', label: 'Nano Banana', desc: 'Google Gemini' },
+                  ] as { value: ImageModel; label: string; desc: string }[]).map((m) => (
+                    <label
+                      key={m.value}
+                      className={`flex-1 relative flex flex-col items-center justify-center p-3 rounded-xl border cursor-pointer transition-all hover:bg-zinc-50 ${imageModel === m.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'border-zinc-200 bg-white'}`}
+                    >
+                      <input
+                        type="radio"
+                        name="modelGroup"
+                        value={m.value}
+                        checked={imageModel === m.value}
+                        onChange={() => setImageModel(m.value)}
+                        className="hidden"
+                      />
+                      <span className="text-[13px] font-bold text-zinc-800 tracking-tight leading-none mb-1">{m.label}</span>
+                      <span className="text-[9px] text-zinc-500 font-medium text-center leading-[1.1] opacity-80">{m.desc}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
               {/* Customization: Typography */}
               <div className="flex flex-col gap-3">
                 <label className="text-[13px] font-semibold text-zinc-900 tracking-wide uppercase flex items-center gap-2">
@@ -455,9 +494,10 @@ export default function App() {
                   </label>
                   <div className="flex gap-2">
                     {orientations.map((o) => (
-                      <label key={o.value} className={`flex-1 relative flex items-center justify-center p-2 rounded-lg border cursor-pointer transition-all hover:bg-zinc-50 ${orientation === o.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white border-zinc-200'}`}>
+                      <label key={o.value} className={`flex-1 relative flex flex-col items-center justify-center p-2.5 rounded-lg border cursor-pointer transition-all hover:bg-zinc-50 ${orientation === o.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white border-zinc-200'}`}>
                         <input type="radio" value={o.value} checked={orientation === o.value} onChange={(e) => setOrientation(e.target.value)} className="hidden" />
-                        <span className="text-[11px] font-bold text-zinc-800 tracking-tight text-center leading-none">{o.label}</span>
+                        <span className="text-[11px] font-bold text-zinc-800 tracking-tight text-center leading-none mb-1">{o.label}</span>
+                        <span className="text-[9px] text-zinc-500 font-medium text-center leading-[1.1] opacity-80">{o.desc}</span>
                       </label>
                     ))}
                   </div>
@@ -651,9 +691,9 @@ export default function App() {
                 </div>
               </div>
 
-              {!API_KEY && (
+              {!activeApiKey && (
                 <div className="text-xs text-red-600 bg-red-50 p-3 rounded-lg border border-red-100 font-medium whitespace-pre-wrap">
-                  API Key missing. Please set VITE_GOOGLE_GEMINI_API_KEY.
+                  API Key missing. Please set {activeKeyName}.
                 </div>
               )}
 
@@ -681,7 +721,7 @@ export default function App() {
           </div>
 
           <div className="mt-10 pt-6 border-t border-zinc-100 flex items-center justify-between text-zinc-400 text-xs font-mono">
-            <span>SYS: NANO-BANANA-2 (Image Composer)</span>
+            <span>SYS: {imageModel === 'openai' ? 'GPT-IMAGE (OpenAI)' : 'NANO-BANANA-2 (Gemini)'}</span>
             <span>v3.0.1-LogoDensity</span>
           </div>
         </motion.div>
@@ -705,7 +745,7 @@ export default function App() {
                   className="w-full h-full object-contain mix-blend-multiply animate-spin-burst opacity-90 filter drop-shadow-xl"
                 />
               </div>
-              <p className="mt-12 text-zinc-500 font-bold tracking-widest animate-pulse uppercase text-sm">Nano Banana rendering visual...</p>
+              <p className="mt-12 text-zinc-500 font-bold tracking-widest animate-pulse uppercase text-sm">{imageModel === 'openai' ? 'GPT-Image rendering visual...' : 'Nano Banana rendering visual...'}</p>
             </motion.div>
           ) : generatedImages.length > 0 ? (
             <motion.div
