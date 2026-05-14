@@ -31,6 +31,13 @@ export const generateInfographicImage = async (
   let prompt = `You are a visual data architect for government proposals.
 Generate an infographic image for the following subject: "${topic}".
 
+ABSOLUTE PROHIBITIONS (never include any of these):
+- Stock-photo people or photographic faces
+- Faux-3D gears, isometric cubes, or generic "AI tech" floating elements
+- Clipart, emoji icons, or hand-drawn / sketch-look styling
+- Rainbow gradients or neon glow effects
+- Decorative shadows, bevels, or skeuomorphic textures
+
 STRICT VISUAL REQUIREMENTS:
 - Structure Flow: A highly formalized, ${flow} flow diagram or infographic.
 - Layout Orientation: Ensure the composition tightly fits a standard ${orientation} format document bounds.

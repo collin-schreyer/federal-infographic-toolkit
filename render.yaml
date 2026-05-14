@@ -1,9 +1,11 @@
 services:
   - type: web
-    name: federal-infographic-toolkit
+    name: federal-infographic-toolkit-v2
     env: static
     buildCommand: npm install && npm run build
     staticPublishPath: dist
     envVars:
       - key: VITE_GOOGLE_GEMINI_API_KEY
+        sync: false
+      - key: VITE_OPENAI_API_KEY
         sync: false
