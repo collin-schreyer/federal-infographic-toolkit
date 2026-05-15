@@ -1,3 +1,6 @@
+import type { InfographicSpec } from './spec';
+import { specToPromptBlock } from './spec';
+
 export const generateInfographicImage = async (
   topic: string,
   apiKey: string,
@@ -11,8 +14,11 @@ export const generateInfographicImage = async (
   iconography: string = 'USWDS Default',
   isTransparent: boolean = false,
   imageToReviseBase64: string | null = null,
-  revisionPrompt: string | null = null
+  revisionPrompt: string | null = null,
+  infographicSpec: InfographicSpec | null = null
 ): Promise<string> => {
+
+  const specBlock = infographicSpec ? specToPromptBlock(infographicSpec) : '';
 
   // Convert generic font class to descriptive string for the prompt
   const fontDesc = fontFamily === 'font-serif' ? "Times New Roman (11pt/12pt)" :
@@ -28,7 +34,7 @@ export const generateInfographicImage = async (
     densityDesc = "Balanced standard layout. Clear headers with brief 1-2 sentence descriptions per node.";
   }
 
-  let prompt = `You are a visual data architect for government proposals.
+  let prompt = `${specBlock}You are a visual data architect for government proposals.
 Generate an infographic image for the following subject: "${topic}".
 
 ABSOLUTE PROHIBITIONS (never include any of these):

@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { generateInfographicImage as generateGeminiImage } from './lib/gemini';
 import { generateInfographicImage as generateOpenAIImage } from './lib/openai';
+import { parsePptx } from './lib/parse-pptx';
+import { generateSpec, hashString } from './lib/gpt5-spec';
+import type { InfographicSpec, StructureType, Tone } from './lib/spec';
 import {
   PaperPlaneTilt,
   CircleNotch,
@@ -20,6 +23,10 @@ import {
   CaretDown,
   Cpu,
   WarningCircle,
+  FilePpt,
+  Lightning,
+  TextT,
+  ArrowsClockwise,
 } from '@phosphor-icons/react';
 
 import Landing from './Landing';
@@ -104,8 +111,24 @@ export default function App() {
   const [isTransparent, setIsTransparent] = useState(false);
   const [generationMode, setGenerationMode] = useState<GenerationMode>('both');
 
+  // Reference Material (V2): source text + spec from GPT-5 reasoning
+  type SourceKind = 'pptx' | 'text';
+  const [sourceKind, setSourceKind] = useState<SourceKind>('pptx');
+  const [sourceText, setSourceText] = useState<string>('');
+  const [sourceName, setSourceName] = useState<string>('');
+  const [sourceMeta, setSourceMeta] = useState<string>('');
+  const [sourceParseLoading, setSourceParseLoading] = useState(false);
+  const [sourceError, setSourceError] = useState('');
+  const [pastedText, setPastedText] = useState('');
+
+  const [spec, setSpec] = useState<InfographicSpec | null>(null);
+  const [specLoading, setSpecLoading] = useState(false);
+  const [specError, setSpecError] = useState('');
+  const [specOpen, setSpecOpen] = useState(false);
+
   const colorFileInputRef = useRef<HTMLInputElement>(null);
   const logoFileInputRef = useRef<HTMLInputElement>(null);
+  const sourceFileInputRef = useRef<HTMLInputElement>(null);
 
   // Derived state
   const isGenerating = slots.some(s => s.status === 'rendering');
@@ -231,6 +254,122 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
+  const handleSourceFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setSourceError('');
+    setSourceParseLoading(true);
+    // Drop any prior spec — new source means we need a fresh brief.
+    setSpec(null);
+    setSpecError('');
+
+    try {
+      const parsed = await parsePptx(file);
+      setSourceText(parsed.totalText);
+      setSourceName(file.name);
+      setSourceMeta(`${parsed.slideCount} slide${parsed.slideCount === 1 ? '' : 's'} · ~${parsed.estimatedTokens.toLocaleString()} tokens${parsed.truncated ? ' · truncated' : ''}`);
+    } catch (err: any) {
+      setSourceError(err?.message || 'Failed to parse the file.');
+      setSourceText('');
+      setSourceName('');
+      setSourceMeta('');
+    } finally {
+      setSourceParseLoading(false);
+      if (sourceFileInputRef.current) sourceFileInputRef.current.value = '';
+    }
+  };
+
+  const handlePastedTextApply = () => {
+    if (!pastedText.trim()) return;
+    setSourceError('');
+    setSpec(null);
+    setSpecError('');
+    setSourceText(pastedText.trim());
+    setSourceName('Pasted text');
+    const tokens = Math.ceil(pastedText.length / 4);
+    setSourceMeta(`~${tokens.toLocaleString()} tokens`);
+  };
+
+  const clearSource = () => {
+    setSourceText('');
+    setSourceName('');
+    setSourceMeta('');
+    setSourceError('');
+    setPastedText('');
+    setSpec(null);
+    setSpecError('');
+    setSpecOpen(false);
+  };
+
+  // Generate the InfographicSpec via GPT-5. Cached in sessionStorage by
+  // SHA-256 of (topic + source text + panel hints) so re-clicks are free.
+  const handleGenerateBrief = async () => {
+    if (!OPENAI_API_KEY) {
+      setSpecError('OpenAI API key missing. Set VITE_OPENAI_API_KEY in .env.');
+      return;
+    }
+    if (!topic.trim() && !sourceText.trim()) {
+      setSpecError('Add a topic, reference material, or both first.');
+      return;
+    }
+
+    setSpecError('');
+    setSpecLoading(true);
+
+    const cacheInput = JSON.stringify({ topic, sourceText, orientation, flow, density });
+    const cacheKey = `spec:${await hashString(cacheInput)}`;
+    const cached = sessionStorage.getItem(cacheKey);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached) as InfographicSpec;
+        setSpec(parsed);
+        setSpecOpen(true);
+        setSpecLoading(false);
+        return;
+      } catch {
+        // fall through to regenerate
+      }
+    }
+
+    try {
+      const newSpec = await generateSpec({
+        apiKey: OPENAI_API_KEY,
+        topic: topic.trim() || undefined,
+        referenceText: sourceText.trim() || undefined,
+        panelHints: { orientation, flow, density },
+      });
+      setSpec(newSpec);
+      setSpecOpen(true);
+      sessionStorage.setItem(cacheKey, JSON.stringify(newSpec));
+      // If user had no topic and the spec has a suggested one, prefill it.
+      if (!topic.trim() && newSpec.suggested_topic) {
+        setTopic(newSpec.suggested_topic);
+      }
+    } catch (err: any) {
+      setSpecError(err?.message || 'Spec generation failed.');
+    } finally {
+      setSpecLoading(false);
+    }
+  };
+
+  const updateSpec = <K extends keyof InfographicSpec>(key: K, value: InfographicSpec[K]) => {
+    setSpec(prev => prev ? { ...prev, [key]: value } : prev);
+  };
+
+  const updateSpecNode = (idx: number, patch: Partial<InfographicSpec['nodes'][number]>) => {
+    setSpec(prev => {
+      if (!prev) return prev;
+      const next = [...prev.nodes];
+      next[idx] = { ...next[idx], ...patch };
+      return { ...prev, nodes: next };
+    });
+  };
+
+  const removeSpecNode = (idx: number) => {
+    setSpec(prev => prev ? { ...prev, nodes: prev.nodes.filter((_, i) => i !== idx) } : prev);
+  };
+
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -299,7 +438,8 @@ export default function App() {
         iconography,
         isTransparent,
         targetBase64,
-        revisionPrompt
+        revisionPrompt,
+        spec
       );
 
       setSlots(prev => prev.map((s, i) => i === selectedSlotIndex ? { ...s, url: newImgUrl, status: 'done', error: undefined } : s));
@@ -359,7 +499,10 @@ export default function App() {
         orientation,
         accessibility,
         iconography,
-        isTransparent
+        isTransparent,
+        null,
+        null,
+        spec
       ).then(url => {
         setSlots(prev => prev.map((s, i) => i === idx ? { ...s, status: 'done', url } : s));
       }).catch(err => {
@@ -447,6 +590,293 @@ export default function App() {
           <div className="flex-grow">
             {/* Input Form */}
             <form onSubmit={handleGenerate} className="flex flex-col gap-5">
+
+              {/* Reference Material (V2): upload PPTX or paste text */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase flex items-center gap-1.5">
+                    <FilePpt className="w-3 h-3" /> Reference Material · Optional
+                  </label>
+                  {sourceText && (
+                    <button
+                      type="button"
+                      onClick={clearSource}
+                      className="text-[10px] text-zinc-400 hover:text-red-600 font-medium uppercase tracking-widest"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                {!sourceText ? (
+                  <>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setSourceKind('pptx')}
+                        className={`flex-1 px-2 py-1.5 rounded-md text-[10px] font-bold tracking-wide transition-all ${sourceKind === 'pptx' ? 'bg-zinc-950 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'}`}
+                      >
+                        <FilePpt weight="bold" className="w-3 h-3 inline mr-1" /> Upload PPTX
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSourceKind('text')}
+                        className={`flex-1 px-2 py-1.5 rounded-md text-[10px] font-bold tracking-wide transition-all ${sourceKind === 'text' ? 'bg-zinc-950 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'}`}
+                      >
+                        <TextT weight="bold" className="w-3 h-3 inline mr-1" /> Paste Text
+                      </button>
+                    </div>
+
+                    {sourceKind === 'pptx' ? (
+                      <button
+                        type="button"
+                        onClick={() => sourceFileInputRef.current?.click()}
+                        disabled={sourceParseLoading}
+                        className="w-full border-2 border-dashed border-zinc-200 rounded-xl py-3 px-3 flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-50 hover:border-zinc-300 transition-colors group disabled:opacity-50"
+                      >
+                        <input
+                          type="file"
+                          accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                          className="hidden"
+                          ref={sourceFileInputRef}
+                          onChange={handleSourceFileUpload}
+                        />
+                        {sourceParseLoading ? (
+                          <div className="flex items-center gap-2 text-[13px] text-zinc-600 py-1">
+                            <CircleNotch weight="bold" className="w-4 h-4 animate-spin" /> Parsing deck...
+                          </div>
+                        ) : (
+                          <>
+                            <UploadSimple className="w-4 h-4 text-zinc-500 mb-1" />
+                            <span className="text-[12px] font-medium text-zinc-600">Drop a PowerPoint (.pptx)</span>
+                            <span className="text-[10px] text-zinc-400 mt-0.5">Text gets extracted and fed to GPT-5 reasoning</span>
+                          </>
+                        )}
+                      </button>
+                    ) : (
+                      <div className="flex flex-col gap-1.5">
+                        <textarea
+                          rows={4}
+                          value={pastedText}
+                          onChange={(e) => setPastedText(e.target.value)}
+                          placeholder="Paste an RFP excerpt, scoping notes, prior writeup, or any reference content..."
+                          className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl text-[12px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10 focus:border-zinc-950 transition-all placeholder:text-zinc-400 font-medium text-zinc-900 resize-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={handlePastedTextApply}
+                          disabled={!pastedText.trim()}
+                          className="self-end px-3 py-1.5 bg-zinc-950 text-white text-[10px] font-bold tracking-wide rounded-md disabled:opacity-40"
+                        >
+                          USE TEXT
+                        </button>
+                      </div>
+                    )}
+
+                    {sourceError && (
+                      <p className="text-[11px] text-red-600 font-medium px-1">{sourceError}</p>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-2.5 border border-emerald-200 bg-emerald-50 rounded-xl">
+                    <FilePpt weight="fill" className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <div className="flex flex-col flex-1 min-w-0">
+                      <span className="text-[12px] font-bold text-zinc-900 truncate">{sourceName}</span>
+                      <span className="text-[10px] text-emerald-700 font-mono">{sourceMeta}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Generate Brief CTA — visible whenever there is *something* GPT-5 can reason over */}
+                {(sourceText || topic.trim()) && (
+                  <button
+                    type="button"
+                    onClick={handleGenerateBrief}
+                    disabled={specLoading}
+                    className="w-full mt-1 px-3 py-2.5 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 disabled:opacity-50 flex items-center justify-center gap-2 transition-all"
+                  >
+                    {specLoading ? (
+                      <>
+                        <CircleNotch weight="bold" className="w-4 h-4 animate-spin text-zinc-500" />
+                        <span className="text-[12px] font-semibold text-zinc-700 tracking-wide">GPT-5 reasoning...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Lightning weight="fill" className="w-4 h-4 text-zinc-700" />
+                        <span className="text-[12px] font-semibold text-zinc-800 tracking-wide">{spec ? 'Regenerate Brief' : 'Generate Brief with GPT-5'}</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                {specError && (
+                  <p className="text-[11px] text-red-600 font-medium px-1">{specError}</p>
+                )}
+
+                {/* Brief Preview */}
+                {spec && (
+                  <div className="border border-emerald-300 rounded-xl overflow-hidden bg-emerald-50/40">
+                    <button
+                      type="button"
+                      onClick={() => setSpecOpen(!specOpen)}
+                      className="w-full px-3.5 py-3 flex items-center justify-between gap-3 hover:bg-emerald-50/70 transition-colors text-left"
+                    >
+                      <div className="flex flex-col items-start gap-0.5 min-w-0">
+                        <span className="text-[9px] font-bold text-emerald-800 uppercase tracking-widest flex items-center gap-1.5">
+                          <Lightning weight="fill" className="w-3 h-3" /> Reasoning Brief
+                        </span>
+                        <span className="text-[13px] font-bold text-zinc-900 truncate w-full">{spec.title}</span>
+                        <span className="text-[9px] text-emerald-700 font-mono">
+                          {spec.structure_type} · {spec.nodes.length} nodes · {spec.tone}
+                        </span>
+                      </div>
+                      <CaretDown weight="bold" className={`w-3 h-3 text-zinc-500 transition-transform shrink-0 ${specOpen ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    <AnimatePresence initial={false}>
+                      {specOpen && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.2 }}
+                          className="overflow-hidden"
+                        >
+                          <div className="px-3.5 pb-4 pt-3 flex flex-col gap-3 border-t border-emerald-200">
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Title</label>
+                              <input
+                                value={spec.title}
+                                onChange={(e) => updateSpec('title', e.target.value)}
+                                className="w-full px-2.5 py-1.5 bg-white border border-zinc-200 rounded-md text-[12px] font-medium focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Narrative Summary</label>
+                              <textarea
+                                rows={2}
+                                value={spec.narrative_summary}
+                                onChange={(e) => updateSpec('narrative_summary', e.target.value)}
+                                className="w-full px-2.5 py-1.5 bg-white border border-zinc-200 rounded-md text-[12px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10 resize-none"
+                              />
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Audience</label>
+                                <input
+                                  value={spec.target_audience}
+                                  onChange={(e) => updateSpec('target_audience', e.target.value)}
+                                  className="w-full px-2.5 py-1.5 bg-white border border-zinc-200 rounded-md text-[12px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Tone</label>
+                                <select
+                                  value={spec.tone}
+                                  onChange={(e) => updateSpec('tone', e.target.value as Tone)}
+                                  className="w-full px-2 py-1.5 bg-white border border-zinc-200 rounded-md text-[12px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
+                                >
+                                  <option value="executive">Executive</option>
+                                  <option value="technical">Technical</option>
+                                  <option value="operational">Operational</option>
+                                </select>
+                              </div>
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Structure Type</label>
+                              <select
+                                value={spec.structure_type}
+                                onChange={(e) => updateSpec('structure_type', e.target.value as StructureType)}
+                                className="w-full px-2 py-1.5 bg-white border border-zinc-200 rounded-md text-[12px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
+                              >
+                                <option value="linear">Linear (sequential pipeline)</option>
+                                <option value="hierarchical">Hierarchical (top-down)</option>
+                                <option value="pillared">Pillared (parallel domains)</option>
+                                <option value="matrix">Matrix (relational grid)</option>
+                                <option value="cyclic">Cyclic (feedback loop)</option>
+                              </select>
+                            </div>
+
+                            <div className="flex flex-col gap-1.5 mt-1">
+                              <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Nodes</label>
+                              <div className="flex flex-col gap-1.5">
+                                {spec.nodes.map((n, idx) => (
+                                  <div key={n.id} className="flex items-start gap-1.5">
+                                    <span className="text-[10px] font-mono text-zinc-500 mt-1.5 w-4 shrink-0">{n.id}.</span>
+                                    <div className="flex-1 flex flex-col gap-1">
+                                      <input
+                                        value={n.label}
+                                        onChange={(e) => updateSpecNode(idx, { label: e.target.value })}
+                                        className="w-full px-2 py-1 bg-white border border-zinc-200 rounded-md text-[11px] font-bold focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
+                                        placeholder="Label"
+                                      />
+                                      <input
+                                        value={n.description}
+                                        onChange={(e) => updateSpecNode(idx, { description: e.target.value })}
+                                        className="w-full px-2 py-1 bg-white border border-zinc-200 rounded-md text-[11px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
+                                        placeholder="Description"
+                                      />
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => removeSpecNode(idx)}
+                                      className="text-zinc-400 hover:text-red-600 p-1 mt-0.5 rounded-md hover:bg-red-50 transition-colors shrink-0"
+                                      title="Remove node"
+                                    >
+                                      <Trash className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {spec.key_themes.length > 0 && (
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Themes</label>
+                                <div className="flex flex-wrap gap-1">
+                                  {spec.key_themes.map((t, i) => (
+                                    <span key={i} className="px-1.5 py-0.5 bg-white border border-zinc-200 rounded text-[10px] font-mono text-zinc-700">{t}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {spec.extracted_acronyms.length > 0 && (
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Acronyms (locked verbatim)</label>
+                                <div className="flex flex-wrap gap-1">
+                                  {spec.extracted_acronyms.map((a, i) => (
+                                    <span key={i} className="px-1.5 py-0.5 bg-white border border-zinc-200 rounded text-[10px] font-mono text-zinc-700" title={a.expansion}>{a.term}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {spec.compliance_signals.length > 0 && (
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Compliance Badges</label>
+                                <div className="flex flex-wrap gap-1">
+                                  {spec.compliance_signals.map((c, i) => (
+                                    <span key={i} className="px-1.5 py-0.5 bg-blue-100 border border-blue-200 rounded text-[10px] font-mono text-blue-800">{c}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={handleGenerateBrief}
+                              disabled={specLoading}
+                              className="self-end mt-1 px-3 py-1.5 rounded-md border border-zinc-200 hover:bg-zinc-100 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-40"
+                            >
+                              <ArrowsClockwise weight="bold" className="w-3 h-3" /> Regenerate
+                            </button>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
+              </div>
 
               {/* HERO: Proposal Subject Prompt */}
               <div className="flex flex-col gap-2.5">
