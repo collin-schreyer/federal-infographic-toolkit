@@ -38,7 +38,8 @@ export const generateInfographicImage = async (
   iconography: string = 'USWDS Default',
   isTransparent: boolean = false,
   imageToReviseBase64: string | null = null,
-  revisionPrompt: string | null = null
+  revisionPrompt: string | null = null,
+  baselineContent: string | null = null
 ): Promise<string> => {
 
   const fontDesc = fontFamily === 'font-serif' ? "Times New Roman (11pt/12pt)" :
@@ -54,7 +55,17 @@ export const generateInfographicImage = async (
     densityDesc = "Balanced standard layout. Clear headers with brief 1-2 sentence descriptions per node.";
   }
 
-  let prompt = `You are a visual data architect for government proposals.
+  const baselineBlock = baselineContent
+    ? `CONTENT BASELINE — the following text was extracted from a source deck or document the user provided as reference material. Use it as conceptual context to understand the subject, audience, and themes, but do NOT literally reproduce slides or paragraphs. Synthesize and visualize the underlying ideas in a single original infographic:
+
+${baselineContent}
+
+---
+
+`
+    : '';
+
+  let prompt = `${baselineBlock}You are a visual data architect for government proposals.
 Generate an infographic image for the following subject: "${topic}".
 
 ABSOLUTE PROHIBITIONS (never include any of these):
