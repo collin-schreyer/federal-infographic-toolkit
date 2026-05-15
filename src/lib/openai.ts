@@ -1,6 +1,3 @@
-import type { InfographicSpec } from './spec';
-import { specToPromptBlock } from './spec';
-
 // OpenAI's state-of-the-art image model (per developers.openai.com/api/docs/models/gpt-image-2).
 // Swap to a timestamped snapshot like 'gpt-image-2-2026-04-21' if you need pinning.
 const OPENAI_IMAGE_MODEL = 'gpt-image-2';
@@ -42,10 +39,12 @@ export const generateInfographicImage = async (
   isTransparent: boolean = false,
   imageToReviseBase64: string | null = null,
   revisionPrompt: string | null = null,
-  infographicSpec: InfographicSpec | null = null
+  contextText: string | null = null
 ): Promise<string> => {
 
-  const specBlock = infographicSpec ? specToPromptBlock(infographicSpec) : '';
+  const contextBlock = contextText && contextText.trim()
+    ? `REFERENCE CONTEXT — the user attached the following source material to give you additional context for the subject. Use it to inform the infographic, but do not literally copy slides or paragraphs:\n\n${contextText.trim()}\n\n---\n\n`
+    : '';
 
   const fontDesc = fontFamily === 'font-serif' ? "Times New Roman (11pt/12pt)" :
     fontFamily === 'font-sans' ? "Arial (10pt/11pt)" :
@@ -60,7 +59,7 @@ export const generateInfographicImage = async (
     densityDesc = "Balanced standard layout. Clear headers with brief 1-2 sentence descriptions per node.";
   }
 
-  let prompt = `${specBlock}You are a visual data architect for government proposals.
+  let prompt = `${contextBlock}You are a visual data architect for government proposals.
 Generate an infographic image for the following subject: "${topic}".
 
 ABSOLUTE PROHIBITIONS (never include any of these):

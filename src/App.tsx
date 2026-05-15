@@ -3,8 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { generateInfographicImage as generateGeminiImage } from './lib/gemini';
 import { generateInfographicImage as generateOpenAIImage } from './lib/openai';
 import { parsePptx } from './lib/parse-pptx';
-import { generateSpec, hashString } from './lib/gpt5-spec';
-import type { InfographicSpec, StructureType, Tone } from './lib/spec';
+import { summarizeReference, suggestPromptFromImage } from './lib/gpt5';
 import {
   PaperPlaneTilt,
   CircleNotch,
@@ -24,9 +23,9 @@ import {
   Cpu,
   WarningCircle,
   FilePpt,
-  Lightning,
   TextT,
-  ArrowsClockwise,
+  Sparkle,
+  ArrowDown,
 } from '@phosphor-icons/react';
 
 import Landing from './Landing';
@@ -111,7 +110,7 @@ export default function App() {
   const [isTransparent, setIsTransparent] = useState(false);
   const [generationMode, setGenerationMode] = useState<GenerationMode>('both');
 
-  // Reference Material (V2): source text + spec from GPT-5 reasoning
+  // Reference Material: source text + a short GPT-5 summary the user can see.
   type SourceKind = 'pptx' | 'text';
   const [sourceKind, setSourceKind] = useState<SourceKind>('pptx');
   const [sourceText, setSourceText] = useState<string>('');
@@ -120,15 +119,20 @@ export default function App() {
   const [sourceParseLoading, setSourceParseLoading] = useState(false);
   const [sourceError, setSourceError] = useState('');
   const [pastedText, setPastedText] = useState('');
+  const [contextSummary, setContextSummary] = useState<string>('');
+  const [contextSummaryLoading, setContextSummaryLoading] = useState(false);
 
-  const [spec, setSpec] = useState<InfographicSpec | null>(null);
-  const [specLoading, setSpecLoading] = useState(false);
-  const [specError, setSpecError] = useState('');
-  const [specOpen, setSpecOpen] = useState(false);
+  // Style Reference: upload an existing graphic, get a suggested Proposal Subject.
+  const [styleRefDataUrl, setStyleRefDataUrl] = useState<string | null>(null);
+  const [styleRefName, setStyleRefName] = useState<string>('');
+  const [styleSuggestion, setStyleSuggestion] = useState<string>('');
+  const [styleSuggestionLoading, setStyleSuggestionLoading] = useState(false);
+  const [styleSuggestionError, setStyleSuggestionError] = useState('');
 
   const colorFileInputRef = useRef<HTMLInputElement>(null);
   const logoFileInputRef = useRef<HTMLInputElement>(null);
   const sourceFileInputRef = useRef<HTMLInputElement>(null);
+  const styleRefInputRef = useRef<HTMLInputElement>(null);
 
   // Derived state
   const isGenerating = slots.some(s => s.status === 'rendering');
@@ -254,22 +258,51 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
+  // Kick off a short GPT-5 summary so the user can see what was captured.
+  // Fires automatically after a successful parse/paste.
+  const runContextSummary = async (text: string, images: string[]) => {
+    if (!OPENAI_API_KEY) return;
+    if (!text.trim() && images.length === 0) return;
+    setContextSummary('');
+    setContextSummaryLoading(true);
+    try {
+      const summary = await summarizeReference({
+        apiKey: OPENAI_API_KEY,
+        referenceText: text.trim() || undefined,
+        referenceImages: images.length > 0 ? images : undefined,
+      });
+      setContextSummary(summary);
+    } catch (err: any) {
+      console.warn('[summary] failed:', err);
+      // Non-blocking: summary is nice-to-have, don't surface as a hard error.
+    } finally {
+      setContextSummaryLoading(false);
+    }
+  };
+
   const handleSourceFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    console.log('[upload] File selected:', { name: file.name, size: file.size, type: file.type });
+
     setSourceError('');
     setSourceParseLoading(true);
-    // Drop any prior spec — new source means we need a fresh brief.
-    setSpec(null);
-    setSpecError('');
+    setContextSummary('');
 
     try {
       const parsed = await parsePptx(file);
+      console.log('[upload] Parsed successfully:', { slides: parsed.slideCount, chars: parsed.totalText.length, images: parsed.images.length, tokens: parsed.estimatedTokens, truncated: parsed.truncated });
       setSourceText(parsed.totalText);
       setSourceName(file.name);
-      setSourceMeta(`${parsed.slideCount} slide${parsed.slideCount === 1 ? '' : 's'} · ~${parsed.estimatedTokens.toLocaleString()} tokens${parsed.truncated ? ' · truncated' : ''}`);
+      const parts = [`${parsed.slideCount} slide${parsed.slideCount === 1 ? '' : 's'}`];
+      if (parsed.images.length > 0) parts.push(`${parsed.images.length} image${parsed.images.length === 1 ? '' : 's'}`);
+      parts.push(`~${parsed.estimatedTokens.toLocaleString()} text tokens`);
+      if (parsed.truncated) parts.push('truncated');
+      setSourceMeta(parts.join(' · '));
+      runContextSummary(parsed.totalText, parsed.images.map(i => i.dataUrl));
     } catch (err: any) {
+      console.error('[upload] Parse failed:', err);
       setSourceError(err?.message || 'Failed to parse the file.');
       setSourceText('');
       setSourceName('');
@@ -283,12 +316,11 @@ export default function App() {
   const handlePastedTextApply = () => {
     if (!pastedText.trim()) return;
     setSourceError('');
-    setSpec(null);
-    setSpecError('');
     setSourceText(pastedText.trim());
     setSourceName('Pasted text');
     const tokens = Math.ceil(pastedText.length / 4);
     setSourceMeta(`~${tokens.toLocaleString()} tokens`);
+    runContextSummary(pastedText.trim(), []);
   };
 
   const clearSource = () => {
@@ -297,77 +329,56 @@ export default function App() {
     setSourceMeta('');
     setSourceError('');
     setPastedText('');
-    setSpec(null);
-    setSpecError('');
-    setSpecOpen(false);
+    setContextSummary('');
   };
 
-  // Generate the InfographicSpec via GPT-5. Cached in sessionStorage by
-  // SHA-256 of (topic + source text + panel hints) so re-clicks are free.
-  const handleGenerateBrief = async () => {
+  // Style Reference handlers
+  const handleStyleRefUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setStyleSuggestionError('');
+    setStyleSuggestion('');
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      setStyleRefDataUrl(dataUrl);
+      setStyleRefName(file.name);
+    };
+    reader.onerror = () => setStyleSuggestionError('Failed to read image.');
+    reader.readAsDataURL(file);
+    if (styleRefInputRef.current) styleRefInputRef.current.value = '';
+  };
+
+  const clearStyleRef = () => {
+    setStyleRefDataUrl(null);
+    setStyleRefName('');
+    setStyleSuggestion('');
+    setStyleSuggestionError('');
+  };
+
+  const handleSuggestPrompt = async () => {
+    if (!styleRefDataUrl) return;
     if (!OPENAI_API_KEY) {
-      setSpecError('OpenAI API key missing. Set VITE_OPENAI_API_KEY in .env.');
+      setStyleSuggestionError('OpenAI API key missing. Set VITE_OPENAI_API_KEY in .env.');
       return;
     }
-    if (!topic.trim() && !sourceText.trim()) {
-      setSpecError('Add a topic, reference material, or both first.');
-      return;
-    }
-
-    setSpecError('');
-    setSpecLoading(true);
-
-    const cacheInput = JSON.stringify({ topic, sourceText, orientation, flow, density });
-    const cacheKey = `spec:${await hashString(cacheInput)}`;
-    const cached = sessionStorage.getItem(cacheKey);
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached) as InfographicSpec;
-        setSpec(parsed);
-        setSpecOpen(true);
-        setSpecLoading(false);
-        return;
-      } catch {
-        // fall through to regenerate
-      }
-    }
-
+    setStyleSuggestionError('');
+    setStyleSuggestionLoading(true);
     try {
-      const newSpec = await generateSpec({
+      const prompt = await suggestPromptFromImage({
         apiKey: OPENAI_API_KEY,
-        topic: topic.trim() || undefined,
-        referenceText: sourceText.trim() || undefined,
-        panelHints: { orientation, flow, density },
+        imageDataUrl: styleRefDataUrl,
       });
-      setSpec(newSpec);
-      setSpecOpen(true);
-      sessionStorage.setItem(cacheKey, JSON.stringify(newSpec));
-      // If user had no topic and the spec has a suggested one, prefill it.
-      if (!topic.trim() && newSpec.suggested_topic) {
-        setTopic(newSpec.suggested_topic);
-      }
+      setStyleSuggestion(prompt);
     } catch (err: any) {
-      setSpecError(err?.message || 'Spec generation failed.');
+      setStyleSuggestionError(err?.message || 'Prompt suggestion failed.');
     } finally {
-      setSpecLoading(false);
+      setStyleSuggestionLoading(false);
     }
   };
 
-  const updateSpec = <K extends keyof InfographicSpec>(key: K, value: InfographicSpec[K]) => {
-    setSpec(prev => prev ? { ...prev, [key]: value } : prev);
-  };
-
-  const updateSpecNode = (idx: number, patch: Partial<InfographicSpec['nodes'][number]>) => {
-    setSpec(prev => {
-      if (!prev) return prev;
-      const next = [...prev.nodes];
-      next[idx] = { ...next[idx], ...patch };
-      return { ...prev, nodes: next };
-    });
-  };
-
-  const removeSpecNode = (idx: number) => {
-    setSpec(prev => prev ? { ...prev, nodes: prev.nodes.filter((_, i) => i !== idx) } : prev);
+  const useStyleSuggestionAsSubject = () => {
+    if (styleSuggestion.trim()) setTopic(styleSuggestion.trim());
   };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -439,7 +450,7 @@ export default function App() {
         isTransparent,
         targetBase64,
         revisionPrompt,
-        spec
+        sourceText || null
       );
 
       setSlots(prev => prev.map((s, i) => i === selectedSlotIndex ? { ...s, url: newImgUrl, status: 'done', error: undefined } : s));
@@ -502,7 +513,7 @@ export default function App() {
         isTransparent,
         null,
         null,
-        spec
+        sourceText || null
       ).then(url => {
         setSlots(prev => prev.map((s, i) => i === idx ? { ...s, status: 'done', url } : s));
       }).catch(err => {
@@ -674,7 +685,10 @@ export default function App() {
                     )}
 
                     {sourceError && (
-                      <p className="text-[11px] text-red-600 font-medium px-1">{sourceError}</p>
+                      <div className="px-3 py-2.5 border border-red-200 bg-red-50 rounded-lg flex items-start gap-2">
+                        <WarningCircle weight="fill" className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                        <p className="text-[11px] text-red-700 font-medium leading-snug">{sourceError}</p>
+                      </div>
                     )}
                   </>
                 ) : (
@@ -687,193 +701,94 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Generate Brief CTA — visible whenever there is *something* GPT-5 can reason over */}
-                {(sourceText || topic.trim()) && (
-                  <button
-                    type="button"
-                    onClick={handleGenerateBrief}
-                    disabled={specLoading}
-                    className="w-full mt-1 px-3 py-2.5 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 disabled:opacity-50 flex items-center justify-center gap-2 transition-all"
-                  >
-                    {specLoading ? (
-                      <>
-                        <CircleNotch weight="bold" className="w-4 h-4 animate-spin text-zinc-500" />
-                        <span className="text-[12px] font-semibold text-zinc-700 tracking-wide">GPT-5 reasoning...</span>
-                      </>
+                {/* Auto-generated context summary — a few lines so the user knows what was captured. */}
+                {(contextSummaryLoading || contextSummary) && (
+                  <div className="px-3 py-2.5 border border-zinc-200 bg-zinc-50/60 rounded-lg flex items-start gap-2">
+                    <Sparkle weight="fill" className="w-3.5 h-3.5 text-zinc-500 shrink-0 mt-0.5" />
+                    {contextSummaryLoading ? (
+                      <span className="text-[11px] text-zinc-500 italic">Reading what you uploaded...</span>
                     ) : (
-                      <>
-                        <Lightning weight="fill" className="w-4 h-4 text-zinc-700" />
-                        <span className="text-[12px] font-semibold text-zinc-800 tracking-wide">{spec ? 'Regenerate Brief' : 'Generate Brief with GPT-5'}</span>
-                      </>
+                      <p className="text-[11px] text-zinc-700 leading-snug italic">{contextSummary}</p>
                     )}
-                  </button>
+                  </div>
                 )}
-                {specError && (
-                  <p className="text-[11px] text-red-600 font-medium px-1">{specError}</p>
-                )}
+              </div>
 
-                {/* Brief Preview */}
-                {spec && (
-                  <div className="border border-emerald-300 rounded-xl overflow-hidden bg-emerald-50/40">
+              {/* Style Reference: upload an existing graphic, get a suggested Proposal Subject. */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase flex items-center gap-1.5">
+                    <ImageIcon className="w-3 h-3" /> Style Reference · Optional
+                  </label>
+                  {styleRefDataUrl && (
                     <button
                       type="button"
-                      onClick={() => setSpecOpen(!specOpen)}
-                      className="w-full px-3.5 py-3 flex items-center justify-between gap-3 hover:bg-emerald-50/70 transition-colors text-left"
+                      onClick={clearStyleRef}
+                      className="text-[10px] text-zinc-400 hover:text-red-600 font-medium uppercase tracking-widest"
                     >
-                      <div className="flex flex-col items-start gap-0.5 min-w-0">
-                        <span className="text-[9px] font-bold text-emerald-800 uppercase tracking-widest flex items-center gap-1.5">
-                          <Lightning weight="fill" className="w-3 h-3" /> Reasoning Brief
-                        </span>
-                        <span className="text-[13px] font-bold text-zinc-900 truncate w-full">{spec.title}</span>
-                        <span className="text-[9px] text-emerald-700 font-mono">
-                          {spec.structure_type} · {spec.nodes.length} nodes · {spec.tone}
-                        </span>
-                      </div>
-                      <CaretDown weight="bold" className={`w-3 h-3 text-zinc-500 transition-transform shrink-0 ${specOpen ? 'rotate-180' : ''}`} />
+                      Clear
                     </button>
+                  )}
+                </div>
 
-                    <AnimatePresence initial={false}>
-                      {specOpen && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: 'auto', opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.2 }}
-                          className="overflow-hidden"
+                {!styleRefDataUrl ? (
+                  <button
+                    type="button"
+                    onClick={() => styleRefInputRef.current?.click()}
+                    className="w-full border-2 border-dashed border-zinc-200 rounded-xl py-3 px-3 flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-50 hover:border-zinc-300 transition-colors group"
+                  >
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      ref={styleRefInputRef}
+                      onChange={handleStyleRefUpload}
+                    />
+                    <UploadSimple className="w-4 h-4 text-zinc-500 mb-1" />
+                    <span className="text-[12px] font-medium text-zinc-600">Upload existing graphic</span>
+                    <span className="text-[10px] text-zinc-400 mt-0.5">GPT-5 will suggest a prompt you can use</span>
+                  </button>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <div className="w-full border border-zinc-200 rounded-xl p-2.5 flex items-center gap-3 bg-zinc-50/50">
+                      <img src={styleRefDataUrl} alt="Style reference" className="h-16 w-20 object-cover rounded-md border border-zinc-200 shrink-0" />
+                      <div className="flex flex-col flex-1 min-w-0 gap-1.5">
+                        <span className="text-[12px] font-bold text-zinc-900 truncate">{styleRefName}</span>
+                        <button
+                          type="button"
+                          onClick={handleSuggestPrompt}
+                          disabled={styleSuggestionLoading}
+                          className="self-start px-2.5 py-1 rounded-md bg-zinc-950 hover:bg-zinc-800 text-white text-[10px] font-bold tracking-wide uppercase disabled:opacity-50 flex items-center gap-1.5"
                         >
-                          <div className="px-3.5 pb-4 pt-3 flex flex-col gap-3 border-t border-emerald-200">
-                            <div className="flex flex-col gap-1">
-                              <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Title</label>
-                              <input
-                                value={spec.title}
-                                onChange={(e) => updateSpec('title', e.target.value)}
-                                className="w-full px-2.5 py-1.5 bg-white border border-zinc-200 rounded-md text-[12px] font-medium focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
-                              />
-                            </div>
-                            <div className="flex flex-col gap-1">
-                              <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Narrative Summary</label>
-                              <textarea
-                                rows={2}
-                                value={spec.narrative_summary}
-                                onChange={(e) => updateSpec('narrative_summary', e.target.value)}
-                                className="w-full px-2.5 py-1.5 bg-white border border-zinc-200 rounded-md text-[12px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10 resize-none"
-                              />
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              <div className="flex flex-col gap-1">
-                                <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Audience</label>
-                                <input
-                                  value={spec.target_audience}
-                                  onChange={(e) => updateSpec('target_audience', e.target.value)}
-                                  className="w-full px-2.5 py-1.5 bg-white border border-zinc-200 rounded-md text-[12px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
-                                />
-                              </div>
-                              <div className="flex flex-col gap-1">
-                                <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Tone</label>
-                                <select
-                                  value={spec.tone}
-                                  onChange={(e) => updateSpec('tone', e.target.value as Tone)}
-                                  className="w-full px-2 py-1.5 bg-white border border-zinc-200 rounded-md text-[12px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
-                                >
-                                  <option value="executive">Executive</option>
-                                  <option value="technical">Technical</option>
-                                  <option value="operational">Operational</option>
-                                </select>
-                              </div>
-                            </div>
-                            <div className="flex flex-col gap-1">
-                              <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Structure Type</label>
-                              <select
-                                value={spec.structure_type}
-                                onChange={(e) => updateSpec('structure_type', e.target.value as StructureType)}
-                                className="w-full px-2 py-1.5 bg-white border border-zinc-200 rounded-md text-[12px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
-                              >
-                                <option value="linear">Linear (sequential pipeline)</option>
-                                <option value="hierarchical">Hierarchical (top-down)</option>
-                                <option value="pillared">Pillared (parallel domains)</option>
-                                <option value="matrix">Matrix (relational grid)</option>
-                                <option value="cyclic">Cyclic (feedback loop)</option>
-                              </select>
-                            </div>
+                          {styleSuggestionLoading ? (
+                            <><CircleNotch weight="bold" className="w-3 h-3 animate-spin" /> Analyzing...</>
+                          ) : (
+                            <><Sparkle weight="fill" className="w-3 h-3" /> {styleSuggestion ? 'Re-suggest' : 'Suggest Prompt'}</>
+                          )}
+                        </button>
+                      </div>
+                    </div>
 
-                            <div className="flex flex-col gap-1.5 mt-1">
-                              <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Nodes</label>
-                              <div className="flex flex-col gap-1.5">
-                                {spec.nodes.map((n, idx) => (
-                                  <div key={n.id} className="flex items-start gap-1.5">
-                                    <span className="text-[10px] font-mono text-zinc-500 mt-1.5 w-4 shrink-0">{n.id}.</span>
-                                    <div className="flex-1 flex flex-col gap-1">
-                                      <input
-                                        value={n.label}
-                                        onChange={(e) => updateSpecNode(idx, { label: e.target.value })}
-                                        className="w-full px-2 py-1 bg-white border border-zinc-200 rounded-md text-[11px] font-bold focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
-                                        placeholder="Label"
-                                      />
-                                      <input
-                                        value={n.description}
-                                        onChange={(e) => updateSpecNode(idx, { description: e.target.value })}
-                                        className="w-full px-2 py-1 bg-white border border-zinc-200 rounded-md text-[11px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
-                                        placeholder="Description"
-                                      />
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => removeSpecNode(idx)}
-                                      className="text-zinc-400 hover:text-red-600 p-1 mt-0.5 rounded-md hover:bg-red-50 transition-colors shrink-0"
-                                      title="Remove node"
-                                    >
-                                      <Trash className="w-3 h-3" />
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
+                    {styleSuggestionError && (
+                      <div className="px-3 py-2.5 border border-red-200 bg-red-50 rounded-lg flex items-start gap-2">
+                        <WarningCircle weight="fill" className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                        <p className="text-[11px] text-red-700 font-medium leading-snug">{styleSuggestionError}</p>
+                      </div>
+                    )}
 
-                            {spec.key_themes.length > 0 && (
-                              <div className="flex flex-col gap-1">
-                                <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Themes</label>
-                                <div className="flex flex-wrap gap-1">
-                                  {spec.key_themes.map((t, i) => (
-                                    <span key={i} className="px-1.5 py-0.5 bg-white border border-zinc-200 rounded text-[10px] font-mono text-zinc-700">{t}</span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            {spec.extracted_acronyms.length > 0 && (
-                              <div className="flex flex-col gap-1">
-                                <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Acronyms (locked verbatim)</label>
-                                <div className="flex flex-wrap gap-1">
-                                  {spec.extracted_acronyms.map((a, i) => (
-                                    <span key={i} className="px-1.5 py-0.5 bg-white border border-zinc-200 rounded text-[10px] font-mono text-zinc-700" title={a.expansion}>{a.term}</span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            {spec.compliance_signals.length > 0 && (
-                              <div className="flex flex-col gap-1">
-                                <label className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Compliance Badges</label>
-                                <div className="flex flex-wrap gap-1">
-                                  {spec.compliance_signals.map((c, i) => (
-                                    <span key={i} className="px-1.5 py-0.5 bg-blue-100 border border-blue-200 rounded text-[10px] font-mono text-blue-800">{c}</span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={handleGenerateBrief}
-                              disabled={specLoading}
-                              className="self-end mt-1 px-3 py-1.5 rounded-md border border-zinc-200 hover:bg-zinc-100 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-40"
-                            >
-                              <ArrowsClockwise weight="bold" className="w-3 h-3" /> Regenerate
-                            </button>
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                    {styleSuggestion && (
+                      <div className="flex flex-col gap-2 px-3 py-2.5 border border-zinc-200 bg-white rounded-xl">
+                        <span className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">Suggested Subject</span>
+                        <p className="text-[12px] text-zinc-800 leading-relaxed whitespace-pre-wrap">{styleSuggestion}</p>
+                        <button
+                          type="button"
+                          onClick={useStyleSuggestionAsSubject}
+                          className="self-end px-2.5 py-1 rounded-md border border-zinc-300 hover:bg-zinc-50 text-[10px] font-bold tracking-wide uppercase flex items-center gap-1.5"
+                        >
+                          <ArrowDown weight="bold" className="w-3 h-3" /> Use as Subject
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
