@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { generateInfographicImage as generateGeminiImage } from './lib/gemini';
 import { generateInfographicImage as generateOpenAIImage } from './lib/openai';
-import { parsePptx } from './lib/parse-pptx';
 import {
   PaperPlaneTilt,
   CircleNotch,
@@ -21,7 +20,6 @@ import {
   CaretDown,
   Cpu,
   WarningCircle,
-  FilePpt,
 } from '@phosphor-icons/react';
 
 import Landing from './Landing';
@@ -106,17 +104,8 @@ export default function App() {
   const [isTransparent, setIsTransparent] = useState(false);
   const [generationMode, setGenerationMode] = useState<GenerationMode>('both');
 
-  // Content baseline (optional PowerPoint upload)
-  const [baselineContent, setBaselineContent] = useState<string | null>(null);
-  const [baselineFileName, setBaselineFileName] = useState<string | null>(null);
-  const [baselineSlideCount, setBaselineSlideCount] = useState<number>(0);
-  const [baselineTruncated, setBaselineTruncated] = useState<boolean>(false);
-  const [baselineLoading, setBaselineLoading] = useState<boolean>(false);
-  const [baselineError, setBaselineError] = useState<string>('');
-
   const colorFileInputRef = useRef<HTMLInputElement>(null);
   const logoFileInputRef = useRef<HTMLInputElement>(null);
-  const baselineFileInputRef = useRef<HTMLInputElement>(null);
 
   // Derived state
   const isGenerating = slots.some(s => s.status === 'rendering');
@@ -242,41 +231,6 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  const handleBaselineUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setBaselineError('');
-    setBaselineLoading(true);
-
-    try {
-      const parsed = await parsePptx(file);
-      setBaselineContent(parsed.totalText);
-      setBaselineFileName(file.name);
-      setBaselineSlideCount(parsed.slideCount);
-      setBaselineTruncated(parsed.truncated);
-    } catch (err: any) {
-      setBaselineError(err?.message || 'Failed to parse the file.');
-      setBaselineContent(null);
-      setBaselineFileName(null);
-      setBaselineSlideCount(0);
-      setBaselineTruncated(false);
-    } finally {
-      setBaselineLoading(false);
-      if (baselineFileInputRef.current) {
-        baselineFileInputRef.current.value = '';
-      }
-    }
-  };
-
-  const clearBaseline = () => {
-    setBaselineContent(null);
-    setBaselineFileName(null);
-    setBaselineSlideCount(0);
-    setBaselineTruncated(false);
-    setBaselineError('');
-  };
-
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -345,8 +299,7 @@ export default function App() {
         iconography,
         isTransparent,
         targetBase64,
-        revisionPrompt,
-        baselineContent
+        revisionPrompt
       );
 
       setSlots(prev => prev.map((s, i) => i === selectedSlotIndex ? { ...s, url: newImgUrl, status: 'done', error: undefined } : s));
@@ -406,10 +359,7 @@ export default function App() {
         orientation,
         accessibility,
         iconography,
-        isTransparent,
-        null,
-        null,
-        baselineContent
+        isTransparent
       ).then(url => {
         setSlots(prev => prev.map((s, i) => i === idx ? { ...s, status: 'done', url } : s));
       }).catch(err => {
@@ -497,63 +447,6 @@ export default function App() {
           <div className="flex-grow">
             {/* Input Form */}
             <form onSubmit={handleGenerate} className="flex flex-col gap-5">
-
-              {/* Content Baseline (optional PPTX upload) */}
-              <div className="flex flex-col gap-2">
-                <label className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase flex items-center gap-1.5">
-                  <FilePpt className="w-3 h-3" /> Content Baseline · Optional
-                </label>
-                {!baselineContent ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => baselineFileInputRef.current?.click()}
-                      disabled={baselineLoading}
-                      className="w-full border-2 border-dashed border-zinc-200 rounded-xl py-3 px-3 flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-50 hover:border-zinc-300 transition-colors group disabled:opacity-50"
-                    >
-                      <input
-                        type="file"
-                        accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                        className="hidden"
-                        ref={baselineFileInputRef}
-                        onChange={handleBaselineUpload}
-                      />
-                      {baselineLoading ? (
-                        <div className="flex items-center gap-2 text-[13px] text-zinc-600 py-1">
-                          <CircleNotch weight="bold" className="w-4 h-4 animate-spin" /> Parsing deck...
-                        </div>
-                      ) : (
-                        <>
-                          <UploadSimple className="w-4 h-4 text-zinc-500 mb-1" />
-                          <span className="text-[12px] font-medium text-zinc-600">Upload PowerPoint (.pptx)</span>
-                          <span className="text-[10px] text-zinc-400 mt-0.5">AI uses it as conceptual context, not for verbatim copy</span>
-                        </>
-                      )}
-                    </button>
-                    {baselineError && (
-                      <p className="text-[11px] text-red-600 font-medium px-1">{baselineError}</p>
-                    )}
-                  </>
-                ) : (
-                  <div className="flex items-center gap-2 px-3 py-2.5 border border-emerald-200 bg-emerald-50 rounded-xl">
-                    <FilePpt weight="fill" className="w-4 h-4 text-emerald-700 shrink-0" />
-                    <div className="flex flex-col flex-1 min-w-0">
-                      <span className="text-[12px] font-bold text-zinc-900 truncate">{baselineFileName}</span>
-                      <span className="text-[10px] text-emerald-700 font-mono">
-                        {baselineSlideCount} slide{baselineSlideCount === 1 ? '' : 's'} · ~{Math.ceil((baselineContent?.length || 0) / 4).toLocaleString()} tokens{baselineTruncated ? ' · truncated' : ''}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={clearBaseline}
-                      className="text-zinc-400 hover:text-red-600 p-1 rounded-md hover:bg-red-50 transition-colors shrink-0"
-                      title="Remove baseline"
-                    >
-                      <Trash className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
-              </div>
 
               {/* HERO: Proposal Subject Prompt */}
               <div className="flex flex-col gap-2.5">
