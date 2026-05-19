@@ -1,3 +1,6 @@
+import type { VariantOverrides } from './variant-overrides';
+import { fontDescriptor, backgroundClause, logoClause } from './variant-overrides';
+
 export const generateInfographicImage = async (
   topic: string,
   apiKey: string,
@@ -12,17 +15,21 @@ export const generateInfographicImage = async (
   isTransparent: boolean = false,
   imageToReviseBase64: string | null = null,
   revisionPrompt: string | null = null,
-  contextText: string | null = null
+  contextText: string | null = null,
+  overrides?: VariantOverrides
 ): Promise<string> => {
 
   const contextBlock = contextText && contextText.trim()
     ? `REFERENCE CONTEXT — the user attached the following source material to give you additional context for the subject. Use it to inform the infographic, but do not literally copy slides or paragraphs:\n\n${contextText.trim()}\n\n---\n\n`
     : '';
 
-  // Convert generic font class to descriptive string for the prompt
-  const fontDesc = fontFamily === 'font-serif' ? "Times New Roman (11pt/12pt)" :
-    fontFamily === 'font-sans' ? "Arial (10pt/11pt)" :
-      "Courier New (10pt)";
+  // Apply per-variant overrides where present.
+  const effectiveColors = overrides?.palette?.length ? overrides.palette : colors;
+  const effectiveFontDesc = fontDescriptor(overrides?.typography ?? fontFamily);
+  const includeLogo = !!logoUrl && overrides?.logoTreatment !== 'omit';
+  const bgClause = backgroundClause(overrides?.backgroundMode, isTransparent);
+  const moodLine = overrides?.mood ? `\n- Overall mood: ${overrides.mood}.` : '';
+  const registerLine = overrides?.styleRegister ? `\n- Visual register: in the style of a ${overrides.styleRegister}.` : '';
 
   let densityDesc = "";
   if (density === 'minimal') {
@@ -33,6 +40,27 @@ export const generateInfographicImage = async (
     densityDesc = "Balanced standard layout. Clear headers with brief 1-2 sentence descriptions per node.";
   }
 
+  const requirementsBlock = overrides?.loose ? `
+GUIDELINES (the prompt above is the primary direction — follow it; the items below are guardrails):
+- Federal-grade, serious, professional. No whimsy, cartoons, or playful imagery.
+- Color palette to draw from: ${effectiveColors.join(', ')}. Use freely as primary, accent, and support.
+- Typography: ${effectiveFontDesc}.
+- Information Density: ${densityDesc}
+- ${bgClause}
+- Accessibility & Contrast: ${accessibility}.
+- Iconography Style: ${iconography} style elements only.${moodLine}${registerLine}
+` : `
+STRICT VISUAL REQUIREMENTS:
+- Structure Flow: A highly formalized, ${flow} flow diagram or infographic.
+- Layout Orientation: Ensure the composition tightly fits a standard ${orientation} format document bounds.
+- Information Density: ${densityDesc}
+- Typography: Must strictly use the typography family "${effectiveFontDesc}".
+- Color Scheme: Must strictly utilize this exact palette of hex codes: ${effectiveColors.join(', ')}. Use the first hex as the primary dominant color and subsequent hexes for diverse visual data scaling (icons, timelines, borders). Do not invent colors outside this palette. Use pure white or black only for legibility against colored backgrounds.
+- Background: ${bgClause}
+- Accessibility & Contrast: ${accessibility}.
+- Iconography Style: ${iconography} style elements ONLY. Must remain completely professional and non-cartoony.${moodLine}${registerLine}
+`;
+
   let prompt = `${contextBlock}You are a visual data architect for government proposals.
 Generate an infographic image for the following subject: "${topic}".
 
@@ -42,20 +70,10 @@ ABSOLUTE PROHIBITIONS (never include any of these):
 - Clipart, emoji icons, or hand-drawn / sketch-look styling
 - Rainbow gradients or neon glow effects
 - Decorative shadows, bevels, or skeuomorphic textures
-
-STRICT VISUAL REQUIREMENTS:
-- Structure Flow: A highly formalized, ${flow} flow diagram or infographic.
-- Layout Orientation: Ensure the composition tightly fits a standard ${orientation} format document bounds.
-- Information Density: ${densityDesc}
-- Typography: Must strictly use the typography family "${fontDesc}".
-- Color Scheme: Must strictly utilize this exact palette of hex codes: ${colors.join(', ')}. Use the first hex as the primary dominant color and subsequent hexes for diverse visual data scaling (icons, timelines, borders). Do not invent colors outside this palette. Use pure white or black only for legibility against colored backgrounds.
-- Background Transparency: ${isTransparent ? 'CRITICAL: The background MUST be completely transparent (Alpha 0). Do not include any solid background block or fill.' : 'Ensure a solid professional background color.'}
-- Accessibility & Contrast: ${accessibility}.
-- Iconography Style: ${iconography} style elements ONLY. Must remain completely professional and non-cartoony.
-
+${requirementsBlock}
 ${revisionPrompt && imageToReviseBase64 ? `\nCRITICAL REVISION INSTRUCTION:\nThe user has requested an explicit revision to the attached current rendering. REVISION REQUEST: "${revisionPrompt}". You MUST output a new high-fidelity image that strictly incorporates this revision while perfectly maintaining the previously established structural compliance, typography, and palette restrictions.` : ''}
 
-Do NOT generate any text explanation. ONLY output the high-fidelity image composition using the requested structural details and exact hex color palettes.`;
+Do NOT generate any text explanation. ONLY output the high-fidelity image composition.`;
 
   const requestParts: any[] = [{ text: prompt }];
 
@@ -72,12 +90,12 @@ Do NOT generate any text explanation. ONLY output the high-fidelity image compos
     });
   }
 
-  // If a logo is provided, append it to the composition payload
-  if (logoUrl) {
-    prompt += `\n\nCRITICAL: The attached image is the organization's logo. You MUST insert this exact logo prominently into the top left corner of the generated infographic.`;
-    requestParts[0].text = prompt; // Update the prompt text
+  // If a logo is provided AND treatment isn't 'omit', append it.
+  if (includeLogo && logoUrl) {
+    const logoInstruction = logoClause(overrides?.logoTreatment, true);
+    prompt += logoInstruction;
+    requestParts[0].text = prompt;
 
-    // Extract base64 and mimeType from data URL
     const [header, base64Data] = logoUrl.split(',');
     const mimeMatch = header.match(/:([^;]+);/);
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';

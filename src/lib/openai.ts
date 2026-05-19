@@ -1,3 +1,6 @@
+import type { VariantOverrides } from './variant-overrides';
+import { fontDescriptor, backgroundClause, logoClause } from './variant-overrides';
+
 // OpenAI's state-of-the-art image model (per developers.openai.com/api/docs/models/gpt-image-2).
 // Swap to a timestamped snapshot like 'gpt-image-2-2026-04-21' if you need pinning.
 const OPENAI_IMAGE_MODEL = 'gpt-image-2';
@@ -39,16 +42,21 @@ export const generateInfographicImage = async (
   isTransparent: boolean = false,
   imageToReviseBase64: string | null = null,
   revisionPrompt: string | null = null,
-  contextText: string | null = null
+  contextText: string | null = null,
+  overrides?: VariantOverrides
 ): Promise<string> => {
 
   const contextBlock = contextText && contextText.trim()
     ? `REFERENCE CONTEXT — the user attached the following source material to give you additional context for the subject. Use it to inform the infographic, but do not literally copy slides or paragraphs:\n\n${contextText.trim()}\n\n---\n\n`
     : '';
 
-  const fontDesc = fontFamily === 'font-serif' ? "Times New Roman (11pt/12pt)" :
-    fontFamily === 'font-sans' ? "Arial (10pt/11pt)" :
-      "Courier New (10pt)";
+  // Apply per-variant overrides where present.
+  const effectiveColors = overrides?.palette?.length ? overrides.palette : colors;
+  const effectiveFontDesc = fontDescriptor(overrides?.typography ?? fontFamily);
+  const includeLogo = !!logoUrl && overrides?.logoTreatment !== 'omit';
+  const bgClause = backgroundClause(overrides?.backgroundMode, isTransparent);
+  const moodLine = overrides?.mood ? `\n- Overall mood: ${overrides.mood}.` : '';
+  const registerLine = overrides?.styleRegister ? `\n- Visual register: in the style of a ${overrides.styleRegister}.` : '';
 
   let densityDesc = "";
   if (density === 'minimal') {
@@ -59,6 +67,31 @@ export const generateInfographicImage = async (
     densityDesc = "Balanced standard layout. Clear headers with brief 1-2 sentence descriptions per node.";
   }
 
+  // Absolute prohibitions stay on every variant. The "STRICT VISUAL REQUIREMENTS"
+  // block is replaced with lighter guardrails when overrides.loose is true (i.e.
+  // for Reimagined slots) — that lets the AI-rewritten prompt body actually drive
+  // composition without the wrapper fighting it.
+  const requirementsBlock = overrides?.loose ? `
+GUIDELINES (the prompt above is the primary direction — follow it; the items below are guardrails):
+- Federal-grade, serious, professional. No whimsy, cartoons, or playful imagery.
+- Color palette to draw from: ${effectiveColors.join(', ')}. Use freely as primary, accent, and support.
+- Typography: ${effectiveFontDesc}.
+- Information Density: ${densityDesc}
+- ${bgClause}
+- Accessibility & Contrast: ${accessibility}.
+- Iconography Style: ${iconography} style elements only.${moodLine}${registerLine}
+` : `
+STRICT VISUAL REQUIREMENTS:
+- Structure Flow: A highly formalized, ${flow} flow diagram or infographic.
+- Layout Orientation: Ensure the composition tightly fits a standard ${orientation} format document bounds.
+- Information Density: ${densityDesc}
+- Typography: Must strictly use the typography family "${effectiveFontDesc}".
+- Color Scheme: Must strictly utilize this exact palette of hex codes: ${effectiveColors.join(', ')}. Use the first hex as the primary dominant color and subsequent hexes for diverse visual data scaling (icons, timelines, borders). Do not invent colors outside this palette. Use pure white or black only for legibility against colored backgrounds.
+- Background: ${bgClause}
+- Accessibility & Contrast: ${accessibility}.
+- Iconography Style: ${iconography} style elements ONLY. Must remain completely professional and non-cartoony.${moodLine}${registerLine}
+`;
+
   let prompt = `${contextBlock}You are a visual data architect for government proposals.
 Generate an infographic image for the following subject: "${topic}".
 
@@ -68,25 +101,13 @@ ABSOLUTE PROHIBITIONS (never include any of these):
 - Clipart, emoji icons, or hand-drawn / sketch-look styling
 - Rainbow gradients or neon glow effects
 - Decorative shadows, bevels, or skeuomorphic textures
-
-STRICT VISUAL REQUIREMENTS:
-- Structure Flow: A highly formalized, ${flow} flow diagram or infographic.
-- Layout Orientation: Ensure the composition tightly fits a standard ${orientation} format document bounds.
-- Information Density: ${densityDesc}
-- Typography: Must strictly use the typography family "${fontDesc}".
-- Color Scheme: Must strictly utilize this exact palette of hex codes: ${colors.join(', ')}. Use the first hex as the primary dominant color and subsequent hexes for diverse visual data scaling (icons, timelines, borders). Do not invent colors outside this palette. Use pure white or black only for legibility against colored backgrounds.
-- Background Transparency: ${isTransparent ? 'CRITICAL: The background MUST be completely transparent (Alpha 0). Do not include any solid background block or fill.' : 'Ensure a solid professional background color.'}
-- Accessibility & Contrast: ${accessibility}.
-- Iconography Style: ${iconography} style elements ONLY. Must remain completely professional and non-cartoony.
-
+${requirementsBlock}
 ${revisionPrompt && imageToReviseBase64 ? `\nCRITICAL REVISION INSTRUCTION:\nThe user has requested an explicit revision to the attached current rendering. REVISION REQUEST: "${revisionPrompt}". You MUST output a new high-fidelity image that strictly incorporates this revision while perfectly maintaining the previously established structural compliance, typography, and palette restrictions.` : ''}
-
-${logoUrl ? `\nCRITICAL: One of the attached images is the organization's logo. You MUST insert this exact logo prominently into the top left corner of the generated infographic.` : ''}
-
+${includeLogo ? logoClause(overrides?.logoTreatment, true) : ''}
 Output ONLY the high-fidelity image composition. No surrounding text.`;
 
   const size = orientationToSize(orientation);
-  const hasInputImage = !!(imageToReviseBase64 || logoUrl);
+  const hasInputImage = !!(imageToReviseBase64 || (includeLogo && logoUrl));
 
   if (hasInputImage) {
     // Image edit: accepts reference images (prior render and/or logo)
@@ -102,7 +123,7 @@ Output ONLY the high-fidelity image composition. No surrounding text.`;
     if (imageToReviseBase64) {
       form.append('image[]', dataUrlToBlob(imageToReviseBase64), 'prior-render.png');
     }
-    if (logoUrl) {
+    if (includeLogo && logoUrl) {
       form.append('image[]', dataUrlToBlob(logoUrl), 'logo.png');
     }
 

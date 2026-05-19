@@ -3,7 +3,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { generateInfographicImage as generateGeminiImage } from './lib/gemini';
 import { generateInfographicImage as generateOpenAIImage } from './lib/openai';
 import { parsePptx } from './lib/parse-pptx';
-import { summarizeReference, suggestPromptFromImage } from './lib/gpt5';
+import { summarizeReference, suggestPromptFromImage, getVariantSettings } from './lib/gpt5';
+import type { VariantSettings as GptVariantSettings } from './lib/gpt5';
+import type { VariantOverrides } from './lib/variant-overrides';
 import {
   PaperPlaneTilt,
   CircleNotch,
@@ -35,16 +37,49 @@ const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY || "";
 
 type Engine = 'openai' | 'gemini';
 type GenerationMode = Engine | 'both';
+type Variation = 'baseline' | 'tuned' | 'reimagined';
+
+interface SlotSettings {
+  flow: string;
+  density: 'minimal' | 'standard' | 'detailed';
+  iconography: string;
+  accessibility: string;
+  orientation: string;
+}
+
+type SlotStatus = 'planning' | 'rendering' | 'done' | 'error';
 
 interface VariantSlot {
   engine: Engine;
-  status: 'rendering' | 'done' | 'error';
+  variation: Variation;
+  settings: SlotSettings;
+  topicOverride?: string;     // for Tuned/Reimagined: the fully rewritten prompt
+  visualRhetoric?: string;    // e.g., "maturity matrix", "hub-and-spoke"
+  rationale?: string;         // why GPT-5 picked this approach
+  overrides?: VariantOverrides; // creative unlocks: palette, typography, logo, bg, mood, register, loose
+  status: SlotStatus;
   url?: string;
   error?: string;
 }
 
 const engineLabel = (e: Engine) => e === 'openai' ? 'GPT-Image' : 'Nano Banana';
 const engineShort = (e: Engine) => e === 'openai' ? 'GPT' : 'GEM';
+const variationLabel = (v: Variation) => v === 'baseline' ? 'Baseline' : v === 'tuned' ? 'Tuned' : 'Reimagined';
+
+// Short, human-readable summary of what differs from a base settings bundle.
+const settingsDelta = (base: SlotSettings, s: SlotSettings): string => {
+  const diffs: string[] = [];
+  const shortFlow = (f: string) => f.replace(' Phase Model', '').replace(' Network', '').replace('Abstract Quadrant ', '');
+  const shortIco = (i: string) => i.replace(' Icons', '').replace(' Lineart Elements', '').replace('Solid ', '');
+  const shortAcc = (a: string) => a.includes('High') ? 'High Contrast' : 'Flat USWDS';
+  const shortOri = (o: string) => o.includes('Landscape') ? 'Landscape' : o.includes('Portrait') ? 'Portrait' : 'Foldout';
+  if (s.flow !== base.flow) diffs.push(shortFlow(s.flow));
+  if (s.density !== base.density) diffs.push(s.density);
+  if (s.iconography !== base.iconography) diffs.push(shortIco(s.iconography));
+  if (s.accessibility !== base.accessibility) diffs.push(shortAcc(s.accessibility));
+  if (s.orientation !== base.orientation) diffs.push(shortOri(s.orientation));
+  return diffs.join(' · ');
+};
 
 // Lightweight collapsible drawer used in the customization panel.
 const Drawer: React.FC<{ title: string; icon: React.ReactNode; defaultOpen?: boolean; children: React.ReactNode }> = ({ title, icon, defaultOpen = false, children }) => {
@@ -96,6 +131,7 @@ export default function App() {
   const [revisionPrompt, setRevisionPrompt] = useState<string>('');
   const [isReviseLoading, setIsReviseLoading] = useState<boolean>(false);
 
+
   // Customization state
   const [primaryColor, setPrimaryColor] = useState('#09090b');
   const [accentColor, setAccentColor] = useState('#71717a');
@@ -135,7 +171,8 @@ export default function App() {
   const styleRefInputRef = useRef<HTMLInputElement>(null);
 
   // Derived state
-  const isGenerating = slots.some(s => s.status === 'rendering');
+  const isGenerating = slots.some(s => s.status === 'rendering' || s.status === 'planning');
+  const isPlanningAny = slots.some(s => s.status === 'planning');
   const doneCount = slots.filter(s => s.status === 'done').length;
   const errorCount = slots.filter(s => s.status === 'error').length;
   const selectedSlot = slots[selectedSlotIndex];
@@ -436,21 +473,25 @@ export default function App() {
         ? [primaryColor, accentColor, ...extractedPalette.filter(c => c !== primaryColor && c !== accentColor)]
         : [primaryColor, accentColor];
 
+      // Revise within the variant's own topic + settings so the regenerated image
+      // stays visually consistent with the variant we're editing.
+      const effectiveTopic = slot.topicOverride || topic;
       const newImgUrl = await generator(
-        topic,
+        effectiveTopic,
         apiKey,
         payloadColors,
         selectedFont,
         headerLogo,
-        density,
-        flow,
-        orientation,
-        accessibility,
-        iconography,
+        slot.settings.density,
+        slot.settings.flow,
+        slot.settings.orientation,
+        slot.settings.accessibility,
+        slot.settings.iconography,
         isTransparent,
         targetBase64,
         revisionPrompt,
-        sourceText || null
+        sourceText || null,
+        slot.overrides
       );
 
       setSlots(prev => prev.map((s, i) => i === selectedSlotIndex ? { ...s, url: newImgUrl, status: 'done', error: undefined } : s));
@@ -468,18 +509,16 @@ export default function App() {
     e.preventDefault();
     if (!topic.trim() || isGenerating) return;
 
-    const engineSequence: Engine[] =
-      generationMode === 'openai' ? ['openai', 'openai', 'openai', 'openai'] :
-      generationMode === 'gemini' ? ['gemini', 'gemini', 'gemini', 'gemini'] :
-      ['openai', 'openai', 'gemini', 'gemini'];
+    const engines: Engine[] =
+      generationMode === 'openai' ? ['openai'] :
+      generationMode === 'gemini' ? ['gemini'] :
+      ['openai', 'gemini'];
 
-    const needsOpenAI = engineSequence.includes('openai');
-    const needsGemini = engineSequence.includes('gemini');
-    if (needsOpenAI && !OPENAI_API_KEY) {
+    if (engines.includes('openai') && !OPENAI_API_KEY) {
       setError('OpenAI API key missing. Set VITE_OPENAI_API_KEY in .env.');
       return;
     }
-    if (needsGemini && !GEMINI_API_KEY) {
+    if (engines.includes('gemini') && !GEMINI_API_KEY) {
       setError('Gemini API key missing. Set VITE_GOOGLE_GEMINI_API_KEY in .env.');
       return;
     }
@@ -487,40 +526,141 @@ export default function App() {
     setError('');
     setSelectedSlotIndex(0);
 
-    const initialSlots: VariantSlot[] = engineSequence.map(engine => ({ engine, status: 'rendering' as const }));
-    setSlots(initialSlots);
+    const baseSettings: SlotSettings = { flow, density, iconography, accessibility, orientation };
 
     const payloadColors = extractedPalette.length > 0
       ? [primaryColor, accentColor, ...extractedPalette.filter(c => c !== primaryColor && c !== accentColor)]
       : [primaryColor, accentColor];
 
-    // Fire all four in parallel; update each slot as it resolves.
-    engineSequence.forEach((engine, idx) => {
-      const apiKey = engine === 'openai' ? OPENAI_API_KEY : GEMINI_API_KEY;
-      const generator = engine === 'openai' ? generateOpenAIImage : generateGeminiImage;
+    // Build all slots up-front. Baselines are immediately 'rendering'. Tuned and
+    // Reimagined start as 'planning' (waiting for GPT-5 to choose their visual
+    // rhetoric) and flip to 'rendering' once the plan returns.
+    // Order: variation-major, engine-minor. Baselines first so the user sees
+    // their settings render before the AI's reinterpretations.
+    const variationKinds: Variation[] = ['baseline', 'tuned', 'reimagined'];
+    const initialSlots: VariantSlot[] = [];
+    for (const kind of variationKinds) {
+      for (const engine of engines) {
+        initialSlots.push({
+          engine,
+          variation: kind,
+          settings: baseSettings,
+          status: kind === 'baseline' ? 'rendering' : 'planning',
+        });
+      }
+    }
+    setSlots(initialSlots);
+
+    // Helper: kick off one render for a slot and patch its state as it resolves.
+    const fireSlot = (slotSnapshot: VariantSlot, idx: number) => {
+      const apiKey = slotSnapshot.engine === 'openai' ? OPENAI_API_KEY : GEMINI_API_KEY;
+      const generator = slotSnapshot.engine === 'openai' ? generateOpenAIImage : generateGeminiImage;
+      const effectiveTopic = slotSnapshot.topicOverride || topic;
 
       generator(
-        topic,
+        effectiveTopic,
         apiKey,
         payloadColors,
         selectedFont,
         headerLogo,
-        density,
-        flow,
-        orientation,
-        accessibility,
-        iconography,
+        slotSnapshot.settings.density,
+        slotSnapshot.settings.flow,
+        slotSnapshot.settings.orientation,
+        slotSnapshot.settings.accessibility,
+        slotSnapshot.settings.iconography,
         isTransparent,
         null,
         null,
-        sourceText || null
+        sourceText || null,
+        slotSnapshot.overrides
       ).then(url => {
         setSlots(prev => prev.map((s, i) => i === idx ? { ...s, status: 'done', url } : s));
       }).catch(err => {
-        console.error(`Slot ${idx} (${engine}) failed:`, err);
+        console.error(`Slot ${idx} (${slotSnapshot.engine}, ${slotSnapshot.variation}) failed:`, err);
         setSlots(prev => prev.map((s, i) => i === idx ? { ...s, status: 'error', error: err?.message || String(err) } : s));
       });
+    };
+
+    // Fire baseline slots immediately — they don't wait on GPT-5.
+    initialSlots.forEach((slot, idx) => {
+      if (slot.variation === 'baseline') fireSlot(slot, idx);
     });
+
+    // Plan the two reimaginings in the background. When the plan returns, patch
+    // the planning slots with their real settings + topic override and fire them.
+    // No hard timeout in handler — callChat already has a generous default
+    // safety net (3 min). If anything fails, fall back to heuristic and keep going.
+    (async () => {
+      console.log('[plan] firing GPT-5 variant-settings call (reasoning_effort: high)...');
+      const t0 = Date.now();
+      let variantPair: { tuned: GptVariantSettings; reimagined: GptVariantSettings };
+      try {
+        variantPair = await getVariantSettings({
+          apiKey: OPENAI_API_KEY,
+          topic,
+          base: baseSettings,
+          referenceContext: sourceText || undefined,
+        });
+        console.log(`[plan] returned in ${((Date.now() - t0) / 1000).toFixed(1)}s`, variantPair);
+      } catch (err) {
+        console.warn('[plan] failed entirely; rendering tuned/reimagined as baseline copies:', err);
+        const safeFallback: GptVariantSettings = {
+          ...baseSettings,
+          palette: [],
+          typography: 'sans',
+          logo_treatment: 'top-left',
+          background_mode: 'light',
+          mood: 'editorial',
+          style_register: '',
+          prompt_override: '',
+          visual_rhetoric: '',
+          rationale: 'Plan unavailable; rendered with baseline settings.',
+        };
+        variantPair = { tuned: safeFallback, reimagined: safeFallback };
+      }
+
+      // Patch the planning slots in state AND fire them. We compute the updated
+      // snapshot once so we can both pass it to setSlots and use it for the fires.
+      const planFor = (v: Variation) => v === 'tuned' ? variantPair.tuned : variantPair.reimagined;
+      const updatedSnapshot: VariantSlot[] = initialSlots.map(s => {
+        if (s.variation === 'baseline') return s;
+        const p = planFor(s.variation);
+        // Reimagined gets the loose wrapper so the AI's prompt drives composition;
+        // Tuned keeps the strict wrapper but with the new palette/typography.
+        const overrides: VariantOverrides = {
+          palette: p.palette && p.palette.length > 0 ? p.palette : undefined,
+          typography: p.typography,
+          logoTreatment: p.logo_treatment,
+          backgroundMode: p.background_mode,
+          mood: p.mood,
+          styleRegister: p.style_register,
+          loose: s.variation === 'reimagined',
+        };
+        return {
+          ...s,
+          status: 'rendering',
+          settings: {
+            flow: p.flow,
+            density: p.density,
+            iconography: p.iconography,
+            accessibility: p.accessibility,
+            orientation: p.orientation,
+          },
+          topicOverride: p.prompt_override || undefined,
+          visualRhetoric: p.visual_rhetoric || undefined,
+          rationale: p.rationale,
+          overrides,
+        };
+      });
+
+      setSlots(prev => prev.map((s, i) =>
+        s.variation === 'baseline' ? s : updatedSnapshot[i]
+      ));
+
+      updatedSnapshot.forEach((slot, idx) => {
+        if (slot.variation !== 'baseline') fireSlot(slot, idx);
+      });
+    })();
   };
 
   if (!isStarted) {
@@ -815,9 +955,9 @@ export default function App() {
                 </label>
                 <div className="flex gap-1.5">
                   {([
-                    { value: 'openai' as GenerationMode, label: 'GPT-Image', sub: '4 variants' },
-                    { value: 'both' as GenerationMode, label: 'Both', sub: '2 + 2 (default)' },
-                    { value: 'gemini' as GenerationMode, label: 'Nano Banana', sub: '4 variants' },
+                    { value: 'openai' as GenerationMode, label: 'GPT-Image', sub: '3 variants' },
+                    { value: 'both' as GenerationMode, label: 'Both', sub: '3 + 3 (default)' },
+                    { value: 'gemini' as GenerationMode, label: 'Nano Banana', sub: '3 variants' },
                   ]).map((m) => (
                     <button
                       key={m.value}
@@ -847,11 +987,14 @@ export default function App() {
                 {isGenerating ? (
                   <>
                     <CircleNotch weight="bold" className="animate-spin w-5 h-5" />
-                    <span>Rendering {doneCount}/{slots.length}...</span>
+                    <span>
+                      Rendering {doneCount}/{slots.length}
+                      {isPlanningAny ? ' · GPT-5 still planning variations' : '...'}
+                    </span>
                   </>
                 ) : (
                   <>
-                    <span>Render 4 Variants</span>
+                    <span>Render {generationMode === 'both' ? 6 : 3} Variants</span>
                     <PaperPlaneTilt weight="fill" className="w-[18px] h-[18px] group-hover:translate-x-1 transition-transform" />
                   </>
                 )}
@@ -1128,7 +1271,7 @@ export default function App() {
 
           <div className="mt-8 pt-5 border-t border-zinc-100 flex items-center justify-between text-zinc-400 text-[10px] font-mono">
             <span>
-              SYS: {generationMode === 'openai' ? 'GPT-IMAGE 4×' : generationMode === 'gemini' ? 'NANO-BANANA 4×' : 'GPT-IMAGE + NANO-BANANA (2+2)'}
+              SYS: {generationMode === 'openai' ? 'GPT-IMAGE 3× (Baseline · Tuned · Reimagined)' : generationMode === 'gemini' ? 'NANO-BANANA 3× (Baseline · Tuned · Reimagined)' : 'GPT-IMAGE + NANO-BANANA (3+3 with AI-picked variations)'}
             </span>
             <span>v3.1.0-Streaming</span>
           </div>
@@ -1152,7 +1295,7 @@ export default function App() {
               </div>
               <p className="text-lg font-medium text-zinc-600 mb-2">Awaiting Array Rendering</p>
               <p className="text-sm font-sans italic text-zinc-500">
-                Write the proposal subject, pick a rendering engine mix, and four variants will stream in as each model finishes — typically 6 to 12 seconds per variant.
+                Write the proposal subject, pick a rendering engine mix, and six variants will stream in — GPT-5 plans two reimaginings (~30s), then all six images render in parallel.
               </p>
             </motion.div>
           ) : (
@@ -1174,6 +1317,16 @@ export default function App() {
                     <p className="font-bold text-sm uppercase tracking-wide">Variant failed</p>
                     <p className="text-[11px] font-mono opacity-70 max-w-md text-center break-words">{selectedSlot.error}</p>
                   </div>
+                ) : selectedSlot?.status === 'planning' ? (
+                  <div className="w-full aspect-[11/8.5] flex flex-col items-center justify-center p-8 bg-zinc-50 gap-4">
+                    <Sparkle weight="fill" className="w-12 h-12 text-zinc-400 animate-pulse" />
+                    <p className="text-[11px] uppercase tracking-widest text-zinc-600 font-bold">
+                      GPT-5 is reimagining this variant
+                    </p>
+                    <p className="text-[11px] text-zinc-500 italic max-w-sm text-center">
+                      Choosing a visual rhetoric different from your baseline. This step uses high reasoning and takes 30–90 seconds. The {variationLabel(selectedSlot.variation).toLowerCase()} variant on {engineLabel(selectedSlot.engine)} will start rendering as soon as the plan returns.
+                    </p>
+                  </div>
                 ) : (
                   <div className="w-full aspect-[11/8.5] flex flex-col items-center justify-center p-8 bg-zinc-50 gap-4">
                     <CircleNotch weight="bold" className="w-12 h-12 text-zinc-400 animate-spin" />
@@ -1185,11 +1338,23 @@ export default function App() {
 
                 {/* Export Toolbar (always present) */}
                 <div className="w-full bg-zinc-950 px-4 py-3 flex items-center justify-between z-20">
-                  <div className="flex items-center gap-3">
-                    <span className="text-white text-xs font-mono font-medium opacity-70">
-                      VARIANT {selectedSlotIndex + 1}
-                      {selectedSlot && <span className="ml-2 opacity-60">· {engineLabel(selectedSlot.engine)}</span>}
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-white text-xs font-mono font-medium opacity-70 whitespace-nowrap">
+                      V{selectedSlotIndex + 1}
+                      {selectedSlot && <span className="ml-2 opacity-60">· {engineLabel(selectedSlot.engine)} · {variationLabel(selectedSlot.variation)}</span>}
                     </span>
+                    {selectedSlot && selectedSlot.variation !== 'baseline' && (() => {
+                      const baseline = slots.find(s => s.variation === 'baseline');
+                      const delta = baseline ? settingsDelta(baseline.settings, selectedSlot.settings) : '';
+                      const parts: string[] = [];
+                      if (selectedSlot.visualRhetoric) parts.push(selectedSlot.visualRhetoric);
+                      if (delta) parts.push(delta);
+                      return parts.length > 0 ? (
+                        <span className="hidden md:inline text-[10px] text-zinc-400 font-mono truncate" title={selectedSlot.rationale || ''}>
+                          {parts.join(' · ')}
+                        </span>
+                      ) : null;
+                    })()}
                     <button
                       onClick={() => setIsRevising(!isRevising)}
                       disabled={selectedSlot?.status !== 'done'}
@@ -1240,12 +1405,13 @@ export default function App() {
               </AnimatePresence>
 
               {/* Variant Strip */}
-              <div className="flex items-center gap-3 justify-center w-full flex-wrap">
+              <div className="flex items-center gap-2 justify-center w-full flex-wrap">
                 {slots.map((slot, idx) => (
                   <button
                     key={idx}
                     onClick={() => setSelectedSlotIndex(idx)}
-                    className={`relative h-24 w-32 md:w-36 rounded-lg overflow-hidden border-4 transition-all focus:outline-none shadow-sm ${selectedSlotIndex === idx ? 'border-zinc-950 scale-105 z-10 shadow-xl' : 'border-white opacity-70 hover:opacity-100 hover:scale-[1.02]'}`}
+                    title={slot.rationale || `${variationLabel(slot.variation)} · ${engineLabel(slot.engine)}`}
+                    className={`relative h-20 w-28 md:w-32 rounded-lg overflow-hidden border-4 transition-all focus:outline-none shadow-sm ${selectedSlotIndex === idx ? 'border-zinc-950 scale-105 z-10 shadow-xl' : 'border-white opacity-70 hover:opacity-100 hover:scale-[1.02]'}`}
                   >
                     {slot.status === 'done' && slot.url ? (
                       <img src={slot.url} alt={`Variant ${idx + 1}`} className="w-full h-full object-cover" />
@@ -1253,14 +1419,26 @@ export default function App() {
                       <div className="w-full h-full bg-red-50 flex items-center justify-center">
                         <WarningCircle className="w-6 h-6 text-red-500" />
                       </div>
+                    ) : slot.status === 'planning' ? (
+                      <div className="w-full h-full bg-zinc-100 flex flex-col items-center justify-center relative overflow-hidden gap-1">
+                        <div className="absolute inset-0 bg-gradient-to-r from-zinc-100 via-zinc-200 to-zinc-100 bg-[length:200%_100%] animate-shimmer" />
+                        <Sparkle weight="fill" className="w-4 h-4 text-zinc-500 relative z-10" />
+                        <span className="text-[8px] font-mono font-bold uppercase tracking-widest text-zinc-500 relative z-10">Planning</span>
+                      </div>
                     ) : (
                       <div className="w-full h-full bg-zinc-100 flex items-center justify-center relative overflow-hidden">
                         <div className="absolute inset-0 bg-gradient-to-r from-zinc-100 via-zinc-200 to-zinc-100 bg-[length:200%_100%] animate-shimmer" />
                         <CircleNotch weight="bold" className="w-5 h-5 text-zinc-400 animate-spin relative z-10" />
                       </div>
                     )}
-                    <div className="absolute top-1 left-1.5 bg-zinc-950/75 text-white text-[9px] font-bold px-1.5 py-0.5 rounded backdrop-blur-md">V{idx + 1}</div>
-                    <div className={`absolute bottom-1 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded backdrop-blur-md ${slot.engine === 'openai' ? 'bg-emerald-500/85 text-white' : 'bg-blue-500/85 text-white'}`}>
+                    <div className={`absolute top-1 left-1.5 text-[8.5px] font-bold px-1.5 py-0.5 rounded backdrop-blur-md ${
+                      slot.variation === 'baseline' ? 'bg-zinc-950/75 text-white'
+                        : slot.variation === 'tuned' ? 'bg-amber-500/90 text-white'
+                          : 'bg-purple-500/90 text-white'
+                    }`}>
+                      {variationLabel(slot.variation).toUpperCase()}
+                    </div>
+                    <div className={`absolute bottom-1 right-1.5 text-[8.5px] font-bold px-1.5 py-0.5 rounded backdrop-blur-md ${slot.engine === 'openai' ? 'bg-emerald-500/85 text-white' : 'bg-blue-500/85 text-white'}`}>
                       {engineShort(slot.engine)}
                     </div>
                   </button>
@@ -1268,7 +1446,7 @@ export default function App() {
               </div>
               <p className="text-xs text-zinc-500 italic text-center font-medium opacity-80 -mt-2">
                 {isGenerating
-                  ? `${doneCount} of ${slots.length} variants ready · streaming...`
+                  ? `${doneCount} of ${slots.length} variants ready · streaming${isPlanningAny ? ' · GPT-5 still planning reimaginings' : ''}...`
                   : errorCount > 0
                     ? `${doneCount} of ${slots.length} variants ready · ${errorCount} failed.`
                     : `${slots.length} variants ready. Click to compare alternatives.`}
