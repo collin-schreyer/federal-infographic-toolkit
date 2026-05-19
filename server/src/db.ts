@@ -91,8 +91,8 @@ export async function seedAdminIfMissing() {
 
   db.prepare(`
     INSERT INTO users (id, email, name, password_hash, role, must_change_password, created_at, created_by)
-    VALUES (?, ?, ?, ?, 'admin', ?, ?, NULL)
-  `).run(id, email, 'Collin Schreyer', password_hash, process.env.ADMIN_PASSWORD ? 0 : 1, Date.now());
+    VALUES (?, ?, ?, ?, 'admin', 0, ?, NULL)
+  `).run(id, email, 'Collin Schreyer', password_hash, Date.now());
 
   console.log(`\n[seed] Created initial admin user`);
   console.log(`[seed]   email:    ${email}`);

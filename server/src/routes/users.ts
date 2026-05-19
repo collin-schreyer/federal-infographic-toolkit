@@ -42,7 +42,7 @@ users.post('/users', requireAdmin, async (c) => {
 
   db.prepare(`
     INSERT INTO users (id, email, name, password_hash, role, must_change_password, created_at, created_by)
-    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+    VALUES (?, ?, ?, ?, ?, 0, ?, ?)
   `).run(id, email, name, passwordHash, role, Date.now(), admin.id);
 
   const created = db.prepare(
@@ -80,9 +80,9 @@ users.patch('/users/:id', requireAdmin, async (c) => {
     }
     const passwordHash = await hashPassword(body.new_password);
     db.prepare(
-      'UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?'
+      'UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?'
     ).run(passwordHash, id);
-    // Bump all existing sessions so the user is forced to log in again.
+    // Bump all existing sessions so the user has to log in again with the new password.
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
     resetPassword = body.new_password;
   }

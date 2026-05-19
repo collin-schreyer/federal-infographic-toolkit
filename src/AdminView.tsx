@@ -70,7 +70,7 @@ const AdminView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
         new_password: newPwd.trim() || `tmp-${Math.random().toString(36).slice(2, 10)}`,
       });
       const pwd = data.reset_password!;
-      alert(`Password reset for ${user.email}\n\nTemporary password: ${pwd}\n\nThey must change it on next sign-in. Share securely.`);
+      alert(`Password reset for ${user.email}\n\nNew password: ${pwd}\n\nShare securely. Existing sessions have been invalidated; they'll need to sign in again with this password.`);
       refresh();
     } catch (err: any) {
       setError(err?.message || 'Reset failed.');
@@ -162,9 +162,9 @@ const AdminView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
           {createResult && (
             <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="mt-4 p-3 border border-emerald-200 bg-emerald-50 rounded-lg flex items-start gap-3">
               <div className="flex-1 min-w-0">
-                <p className="text-[11px] font-bold text-emerald-900">User created — share this temporary password securely</p>
+                <p className="text-[11px] font-bold text-emerald-900">User created — share this password securely</p>
                 <p className="text-[11px] text-emerald-800 mt-1 font-mono break-all"><span className="opacity-70">{createResult.email}</span> &middot; <span className="bg-white px-1.5 py-0.5 rounded border border-emerald-200">{createResult.password}</span></p>
-                <p className="text-[10px] text-emerald-700 mt-1">They'll be required to change it on first sign-in.</p>
+                <p className="text-[10px] text-emerald-700 mt-1">They'll use this password to sign in. You can reset it any time from the table below.</p>
               </div>
               <button onClick={() => navigator.clipboard.writeText(createResult.password)} className="text-emerald-700 hover:text-emerald-900 p-1.5 rounded hover:bg-emerald-100" title="Copy password">
                 <Copy className="w-3.5 h-3.5" />
@@ -198,10 +198,7 @@ const AdminView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
               <tbody>
                 {users.map(u => (
                   <tr key={u.id} className="border-b border-zinc-100 last:border-0 hover:bg-zinc-50 transition-colors">
-                    <td className="px-5 py-3 text-[12px] font-medium text-zinc-900">
-                      {u.email}
-                      {u.must_change_password ? <span className="ml-2 text-[9px] font-bold uppercase tracking-widest text-amber-700 bg-amber-100 px-1 py-0.5 rounded">pwd change pending</span> : null}
-                    </td>
+                    <td className="px-5 py-3 text-[12px] font-medium text-zinc-900">{u.email}</td>
                     <td className="px-5 py-3 text-[12px] text-zinc-700">{u.name || <span className="text-zinc-400 italic">—</span>}</td>
                     <td className="px-5 py-3">
                       <button onClick={() => handleToggleRole(u)} className={`text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 rounded ${u.role === 'admin' ? 'bg-zinc-950 text-white' : 'bg-zinc-100 text-zinc-700'} hover:opacity-80`}>{u.role}</button>

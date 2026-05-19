@@ -123,53 +123,6 @@ const Drawer: React.FC<{ title: string; icon: React.ReactNode; defaultOpen?: boo
   );
 };
 
-// Shown when a user's must_change_password flag is set (admin-provisioned or
-// admin-reset account). Blocks access to the rest of the app until rotated.
-const ForcePasswordChange: React.FC<{ currentUser: PublicUser; onChanged: (u: PublicUser) => void }> = ({ currentUser, onChanged }) => {
-  const [current, setCurrent] = useState('');
-  const [next, setNext] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErr('');
-    if (next.length < 8) { setErr('New password must be at least 8 characters.'); return; }
-    if (next !== confirm) { setErr('Passwords do not match.'); return; }
-    setBusy(true);
-    try {
-      await api.post('/api/auth/change-password', { current_password: current, new_password: next });
-      onChanged({ ...currentUser, must_change_password: 0 });
-    } catch (e: any) {
-      setErr(e?.message || 'Failed to change password.');
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="min-h-[100dvh] w-full flex items-center justify-center bg-zinc-50 p-4">
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-        className="bg-white border border-zinc-200 shadow-xl rounded-2xl p-8 md:p-10 max-w-sm w-full flex flex-col gap-5">
-        <div className="flex flex-col items-center gap-3 text-center">
-          <img src="/BA-logo-black.png" alt="B&A" className="h-10 w-auto opacity-90 object-contain mb-1" />
-          <h1 className="text-xl font-bold tracking-tight text-zinc-950 leading-tight">Set a new password</h1>
-          <p className="text-xs text-zinc-500 font-medium">Your account was provisioned with a temporary password. Choose a new one before continuing.</p>
-        </div>
-        {err && <div className="text-[11px] font-bold text-red-600 bg-red-50 p-2.5 rounded-lg border border-red-100 text-center">{err}</div>}
-        <form className="flex flex-col gap-3" onSubmit={submit}>
-          <input type="password" autoComplete="current-password" placeholder="Current (temporary) password" value={current} onChange={e => setCurrent(e.target.value)} required className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px]" />
-          <input type="password" autoComplete="new-password" placeholder="New password (≥ 8 chars)" value={next} onChange={e => setNext(e.target.value)} required className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px]" />
-          <input type="password" autoComplete="new-password" placeholder="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} required className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px]" />
-          <button type="submit" disabled={busy} className="w-full py-3 bg-zinc-950 text-white font-bold text-[13px] tracking-wide rounded-lg disabled:opacity-50 flex items-center justify-center gap-2">
-            {busy && <CircleNotch weight="bold" className="w-4 h-4 animate-spin" />}
-            {busy ? 'Saving...' : 'Update password'}
-          </button>
-        </form>
-      </motion.div>
-    </div>
-  );
-};
-
 export default function App() {
   const [isStarted, setIsStarted] = useState(false);
   const [currentUser, setCurrentUser] = useState<PublicUser | null>(null);
@@ -793,10 +746,6 @@ export default function App() {
         </motion.div>
       </div>
     );
-  }
-
-  if (currentUser?.must_change_password) {
-    return <ForcePasswordChange currentUser={currentUser} onChanged={(u) => setCurrentUser(u)} />;
   }
 
   if (view === 'history' && currentUser) {
