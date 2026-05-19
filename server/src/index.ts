@@ -1,10 +1,18 @@
 import { serve } from '@hono/node-server';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { attachUser } from './auth.js';
 import { seedAdminIfMissing } from './db.js';
 import authRoutes from './routes/auth.js';
+import renderRoutes from './routes/render.js';
+import aiRoutes from './routes/ai.js';
+import historyRoutes from './routes/history.js';
+import userRoutes from './routes/users.js';
+import { readFileSync } from 'fs';
+import { existsSync } from 'fs';
+import { resolve } from 'path';
 
 const app = new Hono();
 
@@ -31,6 +39,26 @@ app.get('/api/health', (c) =>
 );
 
 app.route('/api/auth', authRoutes);
+app.route('/api', renderRoutes);
+app.route('/api', aiRoutes);
+app.route('/api', historyRoutes);
+app.route('/api', userRoutes);
+
+// In production we bundle the built SPA into ./public and serve it from this
+// same process. The static middleware handles /assets/*; everything else that
+// isn't an /api/* route falls back to index.html for SPA client-side routing.
+const PUBLIC_DIR = process.env.PUBLIC_DIR || './public';
+if (existsSync(PUBLIC_DIR)) {
+  app.use('/*', serveStatic({ root: PUBLIC_DIR }));
+  const indexHtmlPath = resolve(PUBLIC_DIR, 'index.html');
+  if (existsSync(indexHtmlPath)) {
+    const indexHtml = readFileSync(indexHtmlPath, 'utf-8');
+    app.get('*', (c) => {
+      if (c.req.path.startsWith('/api/')) return c.notFound();
+      return c.html(indexHtml);
+    });
+  }
+}
 
 // 404 fallback for unknown API routes (keeps SPA fallback clean).
 app.notFound((c) => {

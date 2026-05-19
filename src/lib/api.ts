@@ -1,0 +1,73 @@
+// Centralized fetch wrapper for the Hono backend. Every request sends the
+// session cookie (credentials: 'include' would matter cross-origin; with the
+// Vite proxy and production same-origin it's already same-site). On 401 we
+// dispatch a global event so the SPA can drop back to the login screen.
+
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function apiFetch<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const headers: Record<string, string> = {};
+  let payload: BodyInit | undefined;
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    payload = JSON.stringify(body);
+  }
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: payload,
+    credentials: 'include',
+  });
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent('fit:unauthorized'));
+  }
+  const text = await res.text();
+  let data: any = text;
+  try { data = text ? JSON.parse(text) : null; } catch { /* not json */ }
+  if (!res.ok) {
+    const msg = (data && data.error) || `Request failed: ${res.status}`;
+    throw new ApiError(msg, res.status);
+  }
+  return data as T;
+}
+
+export const api = {
+  get:    <T>(p: string)              => apiFetch<T>('GET',    p),
+  post:   <T>(p: string, body?: any)  => apiFetch<T>('POST',   p, body),
+  patch:  <T>(p: string, body?: any)  => apiFetch<T>('PATCH',  p, body),
+  delete: <T>(p: string)              => apiFetch<T>('DELETE', p),
+};
+
+// ------- Types shared with the server (mirrored manually) -------
+
+export interface PublicUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role: 'admin' | 'user';
+  must_change_password: number;
+  created_at: number;
+  created_by: string | null;
+}
+
+export interface RenderHistoryItem {
+  id: string;
+  topic: string;
+  variation: 'baseline' | 'tuned' | 'reimagined';
+  engine: 'openai' | 'gemini';
+  visual_rhetoric: string | null;
+  source_name: string | null;
+  created_at: number;
+  image_url: string;
+  settings: any;
+}

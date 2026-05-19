@@ -1,36 +1,18 @@
+// Thin client-side wrapper: actual OpenAI call happens on the server so the
+// API key never leaves the backend. Same signature as before so App.tsx
+// doesn't need to change how it calls this function.
 import type { VariantOverrides } from './variant-overrides';
-import { fontDescriptor, backgroundClause, logoClause } from './variant-overrides';
+import { api } from './api';
 
-// OpenAI's state-of-the-art image model (per developers.openai.com/api/docs/models/gpt-image-2).
-// Swap to a timestamped snapshot like 'gpt-image-2-2026-04-21' if you need pinning.
-const OPENAI_IMAGE_MODEL = 'gpt-image-2';
-
-const dataUrlToBlob = (dataUrl: string): Blob => {
-  const [header, base64Data] = dataUrl.split(',');
-  const mimeMatch = header.match(/:([^;]+);/);
-  const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
-  const binary = atob(base64Data);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return new Blob([bytes], { type: mimeType });
-};
-
-// gpt-image-2 accepts flexible sizes (multiples of 16, long:short ratio ≤ 3:1,
-// max edge ≤ 3840, total pixels 655,360-8,294,400). These match the actual page
-// aspect ratios more closely than gpt-image-1's fixed set.
-const orientationToSize = (orientation: string): string => {
-  const o = orientation.toLowerCase();
-  if (o.includes('11x17')) return '1024x1584';      // 11:17 foldout, portrait
-  if (o.includes('landscape')) return '1328x1024';   // 11:8.5
-  if (o.includes('portrait')) return '1024x1328';    // 8.5:11
-  return '1024x1024';
-};
+interface RenderResponse {
+  id: string;
+  dataUrl: string;
+  createdAt: number;
+}
 
 export const generateInfographicImage = async (
   topic: string,
-  apiKey: string,
+  _apiKey: string, // ignored; server reads from env. Kept for signature parity.
   colors: string[],
   fontFamily: string,
   logoUrl: string | null = null,
@@ -43,140 +25,28 @@ export const generateInfographicImage = async (
   imageToReviseBase64: string | null = null,
   revisionPrompt: string | null = null,
   contextText: string | null = null,
-  overrides?: VariantOverrides
+  overrides?: VariantOverrides,
+  meta?: { variation?: 'baseline' | 'tuned' | 'reimagined'; visualRhetoric?: string; sourceName?: string },
 ): Promise<string> => {
-
-  const contextBlock = contextText && contextText.trim()
-    ? `REFERENCE CONTEXT — the user attached the following source material to give you additional context for the subject. Use it to inform the infographic, but do not literally copy slides or paragraphs:\n\n${contextText.trim()}\n\n---\n\n`
-    : '';
-
-  // Apply per-variant overrides where present.
-  const effectiveColors = overrides?.palette?.length ? overrides.palette : colors;
-  const effectiveFontDesc = fontDescriptor(overrides?.typography ?? fontFamily);
-  const includeLogo = !!logoUrl && overrides?.logoTreatment !== 'omit';
-  const bgClause = backgroundClause(overrides?.backgroundMode, isTransparent);
-  const moodLine = overrides?.mood ? `\n- Overall mood: ${overrides.mood}.` : '';
-  const registerLine = overrides?.styleRegister ? `\n- Visual register: in the style of a ${overrides.styleRegister}.` : '';
-
-  let densityDesc = "";
-  if (density === 'minimal') {
-    densityDesc = "Strictly minimalist design. Extremely sparse text. Heavy emphasis on white space, large icons, and minimal words.";
-  } else if (density === 'detailed') {
-    densityDesc = "Highly detailed layout. Comprehensive text blocks, dense analytical data, and sub-bullets thoroughly explaining each step.";
-  } else {
-    densityDesc = "Balanced standard layout. Clear headers with brief 1-2 sentence descriptions per node.";
-  }
-
-  // Absolute prohibitions stay on every variant. The "STRICT VISUAL REQUIREMENTS"
-  // block is replaced with lighter guardrails when overrides.loose is true (i.e.
-  // for Reimagined slots) — that lets the AI-rewritten prompt body actually drive
-  // composition without the wrapper fighting it.
-  const requirementsBlock = overrides?.loose ? `
-GUIDELINES (the prompt above is the primary direction — follow it; the items below are guardrails):
-- Federal-grade, serious, professional. No whimsy, cartoons, or playful imagery.
-- Color palette to draw from: ${effectiveColors.join(', ')}. Use freely as primary, accent, and support.
-- Typography: ${effectiveFontDesc}.
-- Information Density: ${densityDesc}
-- ${bgClause}
-- Accessibility & Contrast: ${accessibility}.
-- Iconography Style: ${iconography} style elements only.${moodLine}${registerLine}
-` : `
-STRICT VISUAL REQUIREMENTS:
-- Structure Flow: A highly formalized, ${flow} flow diagram or infographic.
-- Layout Orientation: Ensure the composition tightly fits a standard ${orientation} format document bounds.
-- Information Density: ${densityDesc}
-- Typography: Must strictly use the typography family "${effectiveFontDesc}".
-- Color Scheme: Must strictly utilize this exact palette of hex codes: ${effectiveColors.join(', ')}. Use the first hex as the primary dominant color and subsequent hexes for diverse visual data scaling (icons, timelines, borders). Do not invent colors outside this palette. Use pure white or black only for legibility against colored backgrounds.
-- Background: ${bgClause}
-- Accessibility & Contrast: ${accessibility}.
-- Iconography Style: ${iconography} style elements ONLY. Must remain completely professional and non-cartoony.${moodLine}${registerLine}
-`;
-
-  let prompt = `${contextBlock}You are a visual data architect for government proposals.
-Generate an infographic image for the following subject: "${topic}".
-
-ABSOLUTE PROHIBITIONS (never include any of these):
-- Stock-photo people or photographic faces
-- Faux-3D gears, isometric cubes, or generic "AI tech" floating elements
-- Clipart, emoji icons, or hand-drawn / sketch-look styling
-- Rainbow gradients or neon glow effects
-- Decorative shadows, bevels, or skeuomorphic textures
-${requirementsBlock}
-${revisionPrompt && imageToReviseBase64 ? `\nCRITICAL REVISION INSTRUCTION:\nThe user has requested an explicit revision to the attached current rendering. REVISION REQUEST: "${revisionPrompt}". You MUST output a new high-fidelity image that strictly incorporates this revision while perfectly maintaining the previously established structural compliance, typography, and palette restrictions.` : ''}
-${includeLogo ? logoClause(overrides?.logoTreatment, true) : ''}
-Output ONLY the high-fidelity image composition. No surrounding text.`;
-
-  const size = orientationToSize(orientation);
-  const hasInputImage = !!(imageToReviseBase64 || (includeLogo && logoUrl));
-
-  if (hasInputImage) {
-    // Image edit: accepts reference images (prior render and/or logo)
-    const form = new FormData();
-    form.append('model', OPENAI_IMAGE_MODEL);
-    form.append('prompt', prompt);
-    form.append('size', size);
-    form.append('n', '1');
-    if (isTransparent) {
-      form.append('background', 'transparent');
-    }
-
-    if (imageToReviseBase64) {
-      form.append('image[]', dataUrlToBlob(imageToReviseBase64), 'prior-render.png');
-    }
-    if (includeLogo && logoUrl) {
-      form.append('image[]', dataUrlToBlob(logoUrl), 'logo.png');
-    }
-
-    const response = await fetch('https://api.openai.com/v1/images/edits', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-      body: form,
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error("OpenAI Error:", response.status, errText);
-      throw new Error(`Failed to fetch from OpenAI Image Edits: ${response.status} ${errText}`);
-    }
-
-    const result = await response.json();
-    const b64 = result.data?.[0]?.b64_json;
-    if (!b64) {
-      throw new Error("No image data returned from OpenAI image edit.");
-    }
-    return `data:image/png;base64,${b64}`;
-  }
-
-  // Pure text-to-image
-  const body: Record<string, unknown> = {
-    model: OPENAI_IMAGE_MODEL,
-    prompt,
-    n: 1,
-    size,
-  };
-  if (isTransparent) {
-    body.background = 'transparent';
-  }
-
-  const response = await fetch('https://api.openai.com/v1/images/generations', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
+  const { dataUrl } = await api.post<RenderResponse>('/api/render', {
+    engine: 'openai',
+    topic,
+    colors,
+    fontFamily,
+    logoUrl,
+    density,
+    flow,
+    orientation,
+    accessibility,
+    iconography,
+    isTransparent,
+    imageToReviseBase64,
+    revisionPrompt,
+    contextText,
+    overrides,
+    variation: meta?.variation,
+    visualRhetoric: meta?.visualRhetoric,
+    sourceName: meta?.sourceName,
   });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    console.error("OpenAI Error:", response.status, errText);
-    throw new Error(`Failed to fetch from OpenAI Image Generations: ${response.status} ${errText}`);
-  }
-
-  const result = await response.json();
-  const b64 = result.data?.[0]?.b64_json;
-  if (!b64) {
-    throw new Error("No image data returned from OpenAI image generation.");
-  }
-  return `data:image/png;base64,${b64}`;
+  return dataUrl;
 };

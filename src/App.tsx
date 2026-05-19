@@ -6,6 +6,9 @@ import { parsePptx } from './lib/parse-pptx';
 import { summarizeReference, suggestPromptFromImage, getVariantSettings } from './lib/gpt5';
 import type { VariantSettings as GptVariantSettings } from './lib/gpt5';
 import type { VariantOverrides } from './lib/variant-overrides';
+import { api, type PublicUser } from './lib/api';
+import HistoryView from './HistoryView';
+import AdminView from './AdminView';
 import {
   PaperPlaneTilt,
   CircleNotch,
@@ -20,7 +23,6 @@ import {
   FrameCorners,
   Eye,
   Shapes,
-  CaretLeft,
   CaretDown,
   Cpu,
   WarningCircle,
@@ -116,12 +118,100 @@ const Drawer: React.FC<{ title: string; icon: React.ReactNode; defaultOpen?: boo
   );
 };
 
+// Shown when a user's must_change_password flag is set (admin-provisioned or
+// admin-reset account). Blocks access to the rest of the app until rotated.
+const ForcePasswordChange: React.FC<{ currentUser: PublicUser; onChanged: (u: PublicUser) => void }> = ({ currentUser, onChanged }) => {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr('');
+    if (next.length < 8) { setErr('New password must be at least 8 characters.'); return; }
+    if (next !== confirm) { setErr('Passwords do not match.'); return; }
+    setBusy(true);
+    try {
+      await api.post('/api/auth/change-password', { current_password: current, new_password: next });
+      onChanged({ ...currentUser, must_change_password: 0 });
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to change password.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="min-h-[100dvh] w-full flex items-center justify-center bg-zinc-50 p-4">
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+        className="bg-white border border-zinc-200 shadow-xl rounded-2xl p-8 md:p-10 max-w-sm w-full flex flex-col gap-5">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <img src="/BA-logo-black.png" alt="B&A" className="h-10 w-auto opacity-90 object-contain mb-1" />
+          <h1 className="text-xl font-bold tracking-tight text-zinc-950 leading-tight">Set a new password</h1>
+          <p className="text-xs text-zinc-500 font-medium">Your account was provisioned with a temporary password. Choose a new one before continuing.</p>
+        </div>
+        {err && <div className="text-[11px] font-bold text-red-600 bg-red-50 p-2.5 rounded-lg border border-red-100 text-center">{err}</div>}
+        <form className="flex flex-col gap-3" onSubmit={submit}>
+          <input type="password" autoComplete="current-password" placeholder="Current (temporary) password" value={current} onChange={e => setCurrent(e.target.value)} required className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px]" />
+          <input type="password" autoComplete="new-password" placeholder="New password (≥ 8 chars)" value={next} onChange={e => setNext(e.target.value)} required className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px]" />
+          <input type="password" autoComplete="new-password" placeholder="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} required className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px]" />
+          <button type="submit" disabled={busy} className="w-full py-3 bg-zinc-950 text-white font-bold text-[13px] tracking-wide rounded-lg disabled:opacity-50 flex items-center justify-center gap-2">
+            {busy && <CircleNotch weight="bold" className="w-4 h-4 animate-spin" />}
+            {busy ? 'Saving...' : 'Update password'}
+          </button>
+        </form>
+      </motion.div>
+    </div>
+  );
+};
+
 export default function App() {
   const [isStarted, setIsStarted] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [usernameInput, setUsernameInput] = useState('');
+  const [currentUser, setCurrentUser] = useState<PublicUser | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [view, setView] = useState<'generator' | 'history' | 'admin'>('generator');
+
+  // Restore session on mount, and listen for 401s anywhere to drop back to login.
+  useEffect(() => {
+    api.get<{ user: PublicUser | null }>('/api/auth/me')
+      .then(({ user }) => setCurrentUser(user))
+      .catch(() => setCurrentUser(null))
+      .finally(() => setAuthChecking(false));
+    const onUnauthorized = () => setCurrentUser(null);
+    window.addEventListener('fit:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('fit:unauthorized', onUnauthorized);
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthBusy(true);
+    try {
+      const { user } = await api.post<{ user: PublicUser }>('/api/auth/login', {
+        email: emailInput.trim(),
+        password: passwordInput,
+      });
+      setCurrentUser(user);
+      setEmailInput('');
+      setPasswordInput('');
+    } catch (err: any) {
+      setAuthError(err?.message || 'Login failed.');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try { await api.post('/api/auth/logout'); } catch { /* ignore */ }
+    setCurrentUser(null);
+    setView('generator');
+  };
+
+  const isAuthenticated = !!currentUser;
 
   const [topic, setTopic] = useState('');
   const [slots, setSlots] = useState<VariantSlot[]>([]);
@@ -667,6 +757,14 @@ export default function App() {
     return <Landing onStart={() => setIsStarted(true)} />;
   }
 
+  if (authChecking) {
+    return (
+      <div className="min-h-[100dvh] w-full flex items-center justify-center bg-zinc-50">
+        <CircleNotch weight="bold" className="w-8 h-8 text-zinc-400 animate-spin" />
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-[100dvh] w-full flex items-center justify-center bg-zinc-50 font-sans p-4 relative overflow-hidden">
@@ -680,33 +778,40 @@ export default function App() {
           <div className="flex flex-col items-center gap-3 text-center">
             <img src="/BA-logo-black.png" alt="B&A Authentication" className="h-10 w-auto opacity-90 object-contain mb-2" />
             <h1 className="text-xl font-bold tracking-tight text-zinc-950 leading-tight">Federal Infographic Toolkit</h1>
-            <p className="text-xs text-zinc-500 font-medium">Please authenticate to access the generation engine.</p>
+            <p className="text-xs text-zinc-500 font-medium">Sign in to access the generation engine.</p>
           </div>
 
           {authError && <div className="text-[11px] font-bold text-red-600 bg-red-50 p-3 rounded-lg border border-red-100 text-center">{authError}</div>}
 
-          <form className="flex flex-col gap-4" onSubmit={(e) => {
-            e.preventDefault();
-            if (usernameInput === 'admin' && passwordInput === 'BAinfographic2026!') {
-              setIsAuthenticated(true);
-              setAuthError('');
-            } else {
-              setAuthError('Invalid credentials. Access denied.');
-            }
-          }}>
+          <form className="flex flex-col gap-4" onSubmit={handleLogin}>
             <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">Username</label>
-              <input type="text" value={usernameInput} onChange={(e) => setUsernameInput(e.target.value)} className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px] font-medium focus:outline-none focus:ring-2 focus:ring-zinc-950/20" />
+              <label className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">Email</label>
+              <input type="email" autoComplete="username" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} required className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px] font-medium focus:outline-none focus:ring-2 focus:ring-zinc-950/20" />
             </div>
             <div className="flex flex-col gap-1.5">
               <label className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">Password</label>
-              <input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px] font-medium focus:outline-none focus:ring-2 focus:ring-zinc-950/20" />
+              <input type="password" autoComplete="current-password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} required className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 text-[13px] font-medium focus:outline-none focus:ring-2 focus:ring-zinc-950/20" />
             </div>
-            <button type="submit" className="w-full py-3 bg-zinc-950 text-white font-bold text-[13px] tracking-wide rounded-lg hover:bg-zinc-800 transition-all mt-2 shadow-md hover:shadow-lg hover:-translate-y-px">Authenticate</button>
+            <button type="submit" disabled={authBusy} className="w-full py-3 bg-zinc-950 text-white font-bold text-[13px] tracking-wide rounded-lg hover:bg-zinc-800 transition-all mt-2 shadow-md disabled:opacity-50 flex items-center justify-center gap-2">
+              {authBusy && <CircleNotch weight="bold" className="w-4 h-4 animate-spin" />}
+              {authBusy ? 'Signing in...' : 'Sign in'}
+            </button>
           </form>
+          <p className="text-[10px] text-zinc-400 text-center">If you don't have an account, ask your admin to create one for you.</p>
         </motion.div>
       </div>
     );
+  }
+
+  if (currentUser?.must_change_password) {
+    return <ForcePasswordChange currentUser={currentUser} onChanged={(u) => setCurrentUser(u)} />;
+  }
+
+  if (view === 'history' && currentUser) {
+    return <HistoryView currentUser={currentUser} onBack={() => setView('generator')} onLogout={handleLogout} />;
+  }
+  if (view === 'admin' && currentUser?.role === 'admin') {
+    return <AdminView currentUser={currentUser} onBack={() => setView('generator')} onLogout={handleLogout} />;
   }
 
   return (
@@ -729,13 +834,34 @@ export default function App() {
                 <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest leading-none">Compliance & Proposals</p>
               </div>
             </div>
-            <button
-              onClick={() => { setIsStarted(false); setIsAuthenticated(false); }}
-              className="text-zinc-400 hover:text-zinc-950 hover:bg-zinc-100 p-1.5 rounded-lg transition-all flex items-center justify-center group border border-transparent hover:border-zinc-200"
-              title="Return to Home Screen"
-            >
-              <CaretLeft className="w-5 h-5 group-hover:-translate-x-0.5 transition-transform" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setView('history')}
+                className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 rounded transition-all"
+                title="View your past renders"
+              >
+                History
+              </button>
+              {currentUser?.role === 'admin' && (
+                <button
+                  type="button"
+                  onClick={() => setView('admin')}
+                  className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 rounded transition-all"
+                  title="Manage users"
+                >
+                  Admin
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded transition-all"
+                title={currentUser ? `Sign out (${currentUser.email})` : 'Sign out'}
+              >
+                Sign Out
+              </button>
+            </div>
           </div>
 
           <div className="flex-grow">

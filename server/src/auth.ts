@@ -4,6 +4,15 @@ import type { Context, Next } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { db, type DbUser, type PublicUser, toPublicUser } from './db.js';
 
+// Augment Hono's typed context so c.get('user')/c.set('user') is well-typed
+// across routes. Declared once here; imported transitively by anything that
+// imports from this module.
+declare module 'hono' {
+  interface ContextVariableMap {
+    user: PublicUser | null;
+  }
+}
+
 const COOKIE_NAME = 'fit_session';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
