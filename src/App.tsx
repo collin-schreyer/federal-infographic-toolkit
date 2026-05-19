@@ -34,8 +34,13 @@ import {
 
 import Landing from './Landing';
 
-const GEMINI_API_KEY = import.meta.env.VITE_GOOGLE_GEMINI_API_KEY || "";
-const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY || "";
+// API keys live server-side (Phase 2). The frontend just sends the cookie
+// with each request; the server reads OPENAI_API_KEY / GOOGLE_GEMINI_API_KEY
+// from its own env and returns an error if either is missing. These empty
+// constants are kept so existing call sites that take an apiKey arg still
+// type-check; the value is ignored downstream.
+const GEMINI_API_KEY = '';
+const OPENAI_API_KEY = '';
 
 type Engine = 'openai' | 'gemini';
 type GenerationMode = Engine | 'both';
@@ -388,7 +393,6 @@ export default function App() {
   // Kick off a short GPT-5 summary so the user can see what was captured.
   // Fires automatically after a successful parse/paste.
   const runContextSummary = async (text: string, images: string[]) => {
-    if (!OPENAI_API_KEY) return;
     if (!text.trim() && images.length === 0) return;
     setContextSummary('');
     setContextSummaryLoading(true);
@@ -485,10 +489,6 @@ export default function App() {
 
   const handleSuggestPrompt = async () => {
     if (!styleRefDataUrl) return;
-    if (!OPENAI_API_KEY) {
-      setStyleSuggestionError('OpenAI API key missing. Set VITE_OPENAI_API_KEY in .env.');
-      return;
-    }
     setStyleSuggestionError('');
     setStyleSuggestionLoading(true);
     try {
@@ -604,14 +604,6 @@ export default function App() {
       generationMode === 'gemini' ? ['gemini'] :
       ['openai', 'gemini'];
 
-    if (engines.includes('openai') && !OPENAI_API_KEY) {
-      setError('OpenAI API key missing. Set VITE_OPENAI_API_KEY in .env.');
-      return;
-    }
-    if (engines.includes('gemini') && !GEMINI_API_KEY) {
-      setError('Gemini API key missing. Set VITE_GOOGLE_GEMINI_API_KEY in .env.');
-      return;
-    }
 
     setError('');
     setSelectedSlotIndex(0);
