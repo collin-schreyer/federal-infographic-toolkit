@@ -69,7 +69,7 @@ export async function generateInfographicImage(input: OpenAIRenderInput): Promis
 
   let densityDesc = '';
   if (density === 'minimal') {
-    densityDesc = 'Strictly minimalist design. Extremely sparse text. Heavy emphasis on white space, large icons, and minimal words.';
+    densityDesc = 'EXTREMELY minimalist. 2–5 large icons with single-word or 2-word labels. Heavy white space. NO paragraphs, NO bullet lists, NO descriptive sentences — labels only. Optimized for at-a-glance comprehension in under 2 seconds. Each node carries one short label and nothing more.';
   } else if (density === 'detailed') {
     densityDesc = 'Highly detailed layout. Comprehensive text blocks, dense analytical data, and sub-bullets thoroughly explaining each step.';
   } else {

@@ -162,7 +162,13 @@ const VARIANT_SETTINGS_SCHEMA = {
 
 const VARIANT_SETTINGS_SYSTEM = `You are designing two ALTERNATE visual reinterpretations of a federal proposal infographic so the user has genuinely different options to choose from.
 
-The user's prompt and baseline settings will produce one image (the "baseline"). Your job is to produce TWO meaningfully different reinterpretations of the SAME subject — different enough that at first glance the viewer wouldn't recognize them as the same graphic.
+⚠️ HARDEST RULE — read first:
+Orientations are partitioned into two families:
+  • INLINE family: Inline Banner, Inline Square, Inline Tall, Process Strip
+  • FULL-PAGE family: 11x8.5 Landscape, 8.5x11 Portrait, 11x17 Foldout
+If the user's baseline orientation is in the INLINE family, BOTH "tuned" and "reimagined" MUST pick an orientation from the INLINE family (any of the four). If baseline is in the FULL-PAGE family, BOTH variations MUST stay in the FULL-PAGE family. This is not negotiable — a full-page reimagining is useless when the user is rendering an inline mini graphic. If you violate this rule the server will silently rewrite your output.
+
+The user's prompt and baseline settings will produce one image (the "baseline"). Your job is to produce TWO meaningfully different reinterpretations of the SAME subject — different enough that at first glance the viewer wouldn't recognize them as the same graphic, but always within the user's chosen size family.
 
 1. "tuned" — a fitting alternative approach. Pick a different visual rhetoric than baseline. Differ in flow + orientation + at least one of (iconography, accessibility). Still proposal-grade, still on-subject.
 
@@ -191,6 +197,31 @@ Rules:
     • Small / inline: Inline Banner, Inline Square, Inline Tall, Process Strip — for in-document mini graphics
     • Full page: 11x8.5 Landscape, 8.5x11 Portrait, 11x17 Foldout — for primary proposal figures
   Both variations MUST use an orientation from the SAME family as the baseline. If the user picked an Inline size, both tuned and reimagined must also be Inline sizes (any of the four). If baseline is Full Page, variations must stay Full Page. This keeps the rendered output usable for the intended document position.`;
+
+// Server-side safety net: if GPT-5 returns a variant orientation that crosses
+// the user's size family (inline ↔ full-page), rewrite it to a sibling within
+// the correct family. Prefers an orientation that DIFFERS from the baseline so
+// the variant still feels distinct.
+function enforceSizeFamily(pair: VariantSettingsPair, baseOrientation: string): VariantSettingsPair {
+  const baselineIsInline = INLINE_ORIENTATIONS.has(baseOrientation);
+  const inlinePool = ['Inline Banner', 'Inline Square', 'Inline Tall', 'Process Strip'];
+  const fullPagePool = ['11x8.5 Landscape', '8.5x11 Portrait', '11x17 Foldout'];
+  const correctPool = baselineIsInline ? inlinePool : fullPagePool;
+
+  const fix = (label: string, variant: VariantSettings, takenOrientations: string[]): VariantSettings => {
+    const variantIsInline = INLINE_ORIENTATIONS.has(variant.orientation);
+    if (variantIsInline === baselineIsInline) return variant; // already in the right family
+    // Prefer a sibling that isn't already taken by baseline or the other variant.
+    const candidates = correctPool.filter(o => !takenOrientations.includes(o));
+    const replacement = candidates[0] || correctPool[0];
+    console.warn(`[variant-settings] ${label} returned orientation "${variant.orientation}" (wrong family); rewriting to "${replacement}"`);
+    return { ...variant, orientation: replacement };
+  };
+
+  const tuned = fix('tuned', pair.tuned, [baseOrientation]);
+  const reimagined = fix('reimagined', pair.reimagined, [baseOrientation, tuned.orientation]);
+  return { tuned, reimagined };
+}
 
 function deriveHeuristicVariants(base: { flow: string; density: Density; iconography: string; accessibility: string; orientation: string }, topic: string): VariantSettingsPair {
   const nextIn = (arr: string[], cur: string) => arr[(arr.indexOf(cur) + 1) % arr.length] || arr[0];
@@ -284,7 +315,8 @@ export async function getVariantSettings(input: VariantSettingsInput): Promise<V
       reasoning_effort: 'high',
     });
     console.log(`[variant-settings] returned in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-    return JSON.parse(raw) as VariantSettingsPair;
+    const parsed = JSON.parse(raw) as VariantSettingsPair;
+    return enforceSizeFamily(parsed, base.orientation);
   } catch (e) {
     console.warn('[variant-settings] GPT-5 call failed, using heuristic fallback:', e);
     return deriveHeuristicVariants(base, topic);

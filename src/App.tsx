@@ -201,6 +201,16 @@ export default function App() {
   const [enginesSelected, setEnginesSelected] = useState<Engine[]>(['openai', 'gemini']);
   const [variationsSelected, setVariationsSelected] = useState<Variation[]>(['baseline']);
 
+  // Inline sizes are small in-document graphics. Standard/Detailed densities
+  // are nonsensical at those aspect ratios — they jam tiny illegible text into
+  // a 528-pixel-tall image. When the user picks any inline size, force density
+  // back to 'minimal' and lock the density radios.
+  const INLINE_ORIENTATION_VALUES = ['Inline Banner', 'Inline Square', 'Inline Tall', 'Process Strip'];
+  const isInlineSize = INLINE_ORIENTATION_VALUES.includes(orientation);
+  useEffect(() => {
+    if (isInlineSize && density !== 'minimal') setDensity('minimal');
+  }, [orientation, isInlineSize, density]);
+
   // Reference Material: source text + a short GPT-5 summary the user can see.
   type SourceKind = 'pptx' | 'text';
   const [sourceKind, setSourceKind] = useState<SourceKind>('pptx');
@@ -1185,11 +1195,11 @@ export default function App() {
                     <label className="text-[12px] font-semibold text-zinc-800 tracking-wide flex items-center gap-2">
                       <Faders className="w-3.5 h-3.5 text-zinc-500" /> Information Density
                     </label>
-                    <div className="flex gap-2">
+                    <div className={`flex gap-2 ${isInlineSize ? 'opacity-60' : ''}`}>
                       {densities.map((d) => (
                         <label
                           key={d.value}
-                          className={`flex-1 relative flex flex-col items-center justify-center p-2.5 rounded-xl border cursor-pointer transition-all hover:bg-zinc-50 ${density === d.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'border-zinc-200 bg-white'}`}
+                          className={`flex-1 relative flex flex-col items-center justify-center p-2.5 rounded-xl border transition-all ${isInlineSize ? 'cursor-not-allowed' : 'cursor-pointer hover:bg-zinc-50'} ${density === d.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'border-zinc-200 bg-white'}`}
                         >
                           <input
                             type="radio"
@@ -1197,6 +1207,7 @@ export default function App() {
                             value={d.value}
                             checked={density === d.value}
                             onChange={(e) => setDensity(e.target.value as any)}
+                            disabled={isInlineSize}
                             className="hidden"
                           />
                           <span className="text-[12px] font-bold text-zinc-800 tracking-tight leading-none mb-1">{d.label}</span>
@@ -1204,6 +1215,11 @@ export default function App() {
                         </label>
                       ))}
                     </div>
+                    {isInlineSize && (
+                      <p className="text-[10px] text-zinc-500 italic leading-snug">
+                        Locked to <span className="font-semibold not-italic">Minimal</span> because you picked an inline size. Inline graphics need to read at a glance; denser layouts would render unreadable at this scale. Switch to a Full-page size to change density.
+                      </p>
+                    )}
                   </div>
 
                   {/* Flow */}
