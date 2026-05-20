@@ -31,6 +31,7 @@ import {
   TextT,
   Sparkle,
   ArrowDown,
+  FileDoc,
 } from '@phosphor-icons/react';
 
 import Landing from './Landing';
@@ -44,7 +45,6 @@ const GEMINI_API_KEY = '';
 const OPENAI_API_KEY = '';
 
 type Engine = 'openai' | 'gemini';
-type GenerationMode = Engine | 'both';
 type Variation = 'baseline' | 'tuned' | 'reimagined';
 
 interface SlotSettings {
@@ -195,7 +195,11 @@ export default function App() {
   const [accessibility, setAccessibility] = useState('High Contrast Legibility Mode');
   const [iconography, setIconography] = useState('USWDS Standard Icons');
   const [isTransparent, setIsTransparent] = useState(false);
-  const [generationMode, setGenerationMode] = useState<GenerationMode>('both');
+  // Independent engine + variation multi-selects. Default = 1 GPT + 1 Gemini
+  // baseline (2 variants total). Tuned and Reimagined are opt-in checkboxes
+  // — the costly GPT-5 plan call only fires when at least one is enabled.
+  const [enginesSelected, setEnginesSelected] = useState<Engine[]>(['openai', 'gemini']);
+  const [variationsSelected, setVariationsSelected] = useState<Variation[]>(['baseline']);
 
   // Reference Material: source text + a short GPT-5 summary the user can see.
   type SourceKind = 'pptx' | 'text';
@@ -562,12 +566,16 @@ export default function App() {
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!topic.trim() || isGenerating) return;
+    if (enginesSelected.length === 0) {
+      setError('Pick at least one engine.');
+      return;
+    }
+    if (variationsSelected.length === 0) {
+      setError('Pick at least one variation.');
+      return;
+    }
 
-    const engines: Engine[] =
-      generationMode === 'openai' ? ['openai'] :
-      generationMode === 'gemini' ? ['gemini'] :
-      ['openai', 'gemini'];
-
+    const engines: Engine[] = enginesSelected;
 
     setError('');
     setSelectedSlotIndex(0);
@@ -581,9 +589,13 @@ export default function App() {
     // Build all slots up-front. Baselines are immediately 'rendering'. Tuned and
     // Reimagined start as 'planning' (waiting for GPT-5 to choose their visual
     // rhetoric) and flip to 'rendering' once the plan returns.
-    // Order: variation-major, engine-minor. Baselines first so the user sees
+    // Order: variation-major, engine-minor — baselines first so the user sees
     // their settings render before the AI's reinterpretations.
-    const variationKinds: Variation[] = ['baseline', 'tuned', 'reimagined'];
+    // Honor the user's variation selection — preserve baseline → tuned →
+    // reimagined ordering even when only some are picked.
+    const variationOrder: Variation[] = ['baseline', 'tuned', 'reimagined'];
+    const variationKinds: Variation[] = variationOrder.filter(v => variationsSelected.includes(v));
+    const planNeeded = variationKinds.some(v => v !== 'baseline');
     const initialSlots: VariantSlot[] = [];
     for (const kind of variationKinds) {
       for (const engine of engines) {
@@ -636,6 +648,8 @@ export default function App() {
     // the planning slots with their real settings + topic override and fire them.
     // No hard timeout in handler — callChat already has a generous default
     // safety net (3 min). If anything fails, fall back to heuristic and keep going.
+    // Skip entirely if the user only asked for baselines.
+    if (!planNeeded) return;
     (async () => {
       console.log('[plan] firing GPT-5 variant-settings call (reasoning_effort: high)...');
       const t0 = Date.now();
@@ -826,7 +840,7 @@ export default function App() {
 
           <div className="flex-grow">
             {/* Input Form */}
-            <form onSubmit={handleGenerate} className="flex flex-col gap-5">
+            <div className="flex flex-col gap-5">
 
               {/* Reference Material (V2): upload PPTX or paste text */}
               <div className="flex flex-col gap-2">
@@ -1018,73 +1032,6 @@ export default function App() {
                   </div>
                 )}
               </div>
-
-              {/* HERO: Proposal Subject Prompt */}
-              <div className="flex flex-col gap-2.5">
-                <label htmlFor="topic" className="text-[11px] font-bold text-zinc-700 tracking-widest uppercase flex items-center gap-2">
-                  <Article weight="fill" className="w-3.5 h-3.5 text-zinc-950" /> Proposal Subject
-                </label>
-                <textarea
-                  id="topic"
-                  rows={7}
-                  value={topic}
-                  onChange={(e) => setTopic(e.target.value)}
-                  placeholder="Describe the narrative, sections, and visual story for your infographic. For example: 'A 5-stage vertical pipeline showing how disconnected DLA content systems are unified through ReadyDocs governance, AI orchestration, and DISSECT assurance into mission-ready knowledge.'"
-                  className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-xl text-[14px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10 focus:border-zinc-950 transition-all placeholder:text-zinc-400 font-medium text-zinc-900 shadow-sm resize-none leading-relaxed"
-                />
-              </div>
-
-              {/* Engine Mode Selector (compact) */}
-              <div className="flex flex-col gap-2">
-                <label className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase flex items-center gap-1.5">
-                  <Cpu className="w-3 h-3" /> Rendering Engines
-                </label>
-                <div className="flex gap-1.5">
-                  {([
-                    { value: 'openai' as GenerationMode, label: 'GPT-Image', sub: '3 variants' },
-                    { value: 'both' as GenerationMode, label: 'Both', sub: '3 + 3 (default)' },
-                    { value: 'gemini' as GenerationMode, label: 'Nano Banana', sub: '3 variants' },
-                  ]).map((m) => (
-                    <button
-                      key={m.value}
-                      type="button"
-                      onClick={() => setGenerationMode(m.value)}
-                      className={`flex-1 flex flex-col items-center justify-center px-2 py-2.5 rounded-lg border transition-all ${generationMode === m.value ? 'border-zinc-950 bg-zinc-950 text-white shadow-md' : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'}`}
-                    >
-                      <span className="text-[11px] font-bold tracking-tight leading-none mb-0.5">{m.label}</span>
-                      <span className={`text-[8.5px] font-medium leading-none ${generationMode === m.value ? 'text-zinc-300' : 'text-zinc-500'}`}>{m.sub}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {error && (
-                <div className="text-xs text-red-600 font-medium bg-red-50 p-3 rounded-lg border border-red-100 flex items-start gap-2">
-                  <WarningCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>{error}</span>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={isGenerating || !topic.trim()}
-                className="group w-full py-4 px-4 bg-zinc-950 text-white font-medium text-[15px] flex items-center justify-center gap-2 rounded-xl transition-all hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg hover:-translate-y-[1px] focus:outline-none active:scale-[0.98] active:translate-y-[1px] shadow-md"
-              >
-                {isGenerating ? (
-                  <>
-                    <CircleNotch weight="bold" className="animate-spin w-5 h-5" />
-                    <span>
-                      Rendering {doneCount}/{slots.length}
-                      {isPlanningAny ? ' · GPT-5 still planning variations' : '...'}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span>Render {generationMode === 'both' ? 6 : 3} Variants</span>
-                    <PaperPlaneTilt weight="fill" className="w-[18px] h-[18px] group-hover:translate-x-1 transition-transform" />
-                  </>
-                )}
-              </button>
 
               {/* Customize Drawers */}
               <div className="flex flex-col gap-2 pt-4 mt-2 border-t border-zinc-100">
@@ -1385,20 +1332,124 @@ export default function App() {
                   </div>
                 </Drawer>
               </div>
-            </form>
+            </div>
           </div>
 
           <div className="mt-8 pt-5 border-t border-zinc-100 flex items-center justify-between text-zinc-400 text-[10px] font-mono">
-            <span>
-              SYS: {generationMode === 'openai' ? 'GPT-IMAGE 3× (Baseline · Tuned · Reimagined)' : generationMode === 'gemini' ? 'NANO-BANANA 3× (Baseline · Tuned · Reimagined)' : 'GPT-IMAGE + NANO-BANANA (3+3 with AI-picked variations)'}
-            </span>
-            <span>v3.1.0-Streaming</span>
+            <span>SYS: GPT-IMAGE-2 + NANO-BANANA + GPT-5 PLANNER</span>
+            <span>v3.2.0</span>
           </div>
         </motion.div>
       </section>
 
-      {/* RIGHT: Infographic Output */}
-      <section className="flex-1 w-full flex items-center justify-center bg-zinc-100 relative p-6 md:p-12 h-screen overflow-y-auto pattern-dots pattern-zinc-200 pattern-size-4 pattern-opacity-50">
+      {/* RIGHT: Compose area + variant output */}
+      <section className="flex-1 w-full bg-zinc-100 relative p-6 md:p-10 h-screen overflow-y-auto pattern-dots pattern-zinc-200 pattern-size-4 pattern-opacity-50">
+        <div className="max-w-5xl mx-auto flex flex-col gap-6">
+          {/* Compose form — always visible at the top of the right column */}
+          <form
+            onSubmit={handleGenerate}
+            className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 md:p-6 flex flex-col gap-5"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-[13px] font-bold tracking-widest uppercase text-zinc-950 flex items-center gap-2">
+                <Article weight="fill" className="w-3.5 h-3.5" /> Proposal Subject
+              </h2>
+              <span className="text-[10px] font-mono text-zinc-500">
+                {enginesSelected.length * variationsSelected.length || 0} variant{(enginesSelected.length * variationsSelected.length) === 1 ? '' : 's'}
+              </span>
+            </div>
+
+            <textarea
+              id="topic"
+              rows={8}
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              placeholder="Describe the narrative, sections, and visual story for your infographic. For example: 'A 5-stage vertical pipeline showing how disconnected DLA content systems are unified through ReadyDocs governance, AI orchestration, and DISSECT assurance into mission-ready knowledge.'"
+              className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-xl text-[14px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10 focus:border-zinc-950 transition-all placeholder:text-zinc-400 font-medium text-zinc-900 shadow-sm resize-none leading-relaxed"
+            />
+
+            {/* Chooser — engines + variations */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 flex items-center gap-1.5">
+                  <Cpu className="w-3 h-3" /> Engines
+                </label>
+                <div className="flex gap-2">
+                  {([
+                    { value: 'openai' as Engine, label: 'GPT-Image' },
+                    { value: 'gemini' as Engine, label: 'Nano Banana' },
+                  ]).map(e => {
+                    const on = enginesSelected.includes(e.value);
+                    return (
+                      <button
+                        key={e.value}
+                        type="button"
+                        onClick={() => setEnginesSelected(prev => on ? prev.filter(x => x !== e.value) : [...prev, e.value])}
+                        className={`flex-1 px-3 py-2.5 rounded-lg border-2 transition-all text-[12px] font-bold ${on ? 'border-zinc-950 bg-zinc-950 text-white' : 'border-zinc-200 bg-white text-zinc-500 hover:border-zinc-300 hover:bg-zinc-50'}`}
+                      >
+                        {e.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 flex items-center gap-1.5">
+                  <Sparkle weight="fill" className="w-3 h-3" /> Variations
+                </label>
+                <div className="flex gap-2">
+                  {([
+                    { value: 'baseline' as Variation, label: 'Baseline', sub: 'Your settings' },
+                    { value: 'tuned' as Variation, label: 'Tuned', sub: 'AI-refined' },
+                    { value: 'reimagined' as Variation, label: 'Reimagined', sub: 'AI-reimagined' },
+                  ]).map(v => {
+                    const on = variationsSelected.includes(v.value);
+                    return (
+                      <button
+                        key={v.value}
+                        type="button"
+                        onClick={() => setVariationsSelected(prev => on ? prev.filter(x => x !== v.value) : [...prev, v.value])}
+                        className={`flex-1 px-2 py-2 rounded-lg border-2 transition-all flex flex-col items-center justify-center gap-0.5 ${on ? 'border-zinc-950 bg-zinc-950 text-white' : 'border-zinc-200 bg-white text-zinc-500 hover:border-zinc-300 hover:bg-zinc-50'}`}
+                        title={v.sub}
+                      >
+                        <span className="text-[11px] font-bold leading-none">{v.label}</span>
+                        <span className={`text-[9px] font-medium leading-none ${on ? 'text-zinc-300' : 'text-zinc-400'}`}>{v.sub}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {error && (
+              <div className="text-xs text-red-600 font-medium bg-red-50 p-3 rounded-lg border border-red-100 flex items-start gap-2">
+                <WarningCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isGenerating || !topic.trim() || enginesSelected.length === 0 || variationsSelected.length === 0}
+              className="group w-full py-4 px-4 bg-zinc-950 text-white font-medium text-[15px] flex items-center justify-center gap-2 rounded-xl transition-all hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg hover:-translate-y-[1px] focus:outline-none active:scale-[0.98] active:translate-y-[1px] shadow-md"
+            >
+              {isGenerating ? (
+                <>
+                  <CircleNotch weight="bold" className="animate-spin w-5 h-5" />
+                  <span>
+                    Rendering {doneCount}/{slots.length}
+                    {isPlanningAny ? ' · GPT-5 still planning' : '...'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span>Render {enginesSelected.length * variationsSelected.length || 0} Variant{(enginesSelected.length * variationsSelected.length) === 1 ? '' : 's'}</span>
+                  <PaperPlaneTilt weight="fill" className="w-[18px] h-[18px] group-hover:translate-x-1 transition-transform" />
+                </>
+              )}
+            </button>
+          </form>
+
         <AnimatePresence mode="wait">
           {slots.length === 0 ? (
             <motion.div
@@ -1407,14 +1458,10 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center text-zinc-400 p-12 max-w-md text-center"
+              className="flex flex-col items-center justify-center text-zinc-400 p-8 text-center"
             >
-              <div className="w-24 h-24 mb-6 rounded-full border border-zinc-200 bg-white/50 flex items-center justify-center shadow-inner">
-                <PhosphorImage weight="thin" className="w-10 h-10 text-zinc-300" />
-              </div>
-              <p className="text-lg font-medium text-zinc-600 mb-2">Awaiting Array Rendering</p>
-              <p className="text-sm font-sans italic text-zinc-500">
-                Write the proposal subject, pick a rendering engine mix, and six variants will stream in — GPT-5 plans two reimaginings (~30s), then all six images render in parallel.
+              <p className="text-sm font-sans italic text-zinc-500 max-w-md">
+                Your rendered variants will appear here. Default is one from each engine — flip on Tuned or Reimagined for AI reinterpretations (adds ~30-60s of GPT-5 planning).
               </p>
             </motion.div>
           ) : (
@@ -1424,8 +1471,25 @@ export default function App() {
               animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
               exit={{ opacity: 0 }}
               transition={{ type: "spring", stiffness: 100, damping: 20 }}
-              className="w-full max-w-5xl flex flex-col my-auto gap-6"
+              className="w-full flex flex-col gap-4"
             >
+              {/* Post-render CTA — Preview in Word */}
+              {slots.some(s => s.status === 'done') && (
+                <div className="flex items-center justify-between gap-3 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+                  <div className="flex flex-col">
+                    <span className="text-[11px] font-bold uppercase tracking-widest text-emerald-800">Done — see it in a real proposal page</span>
+                    <span className="text-[11px] text-emerald-700">Preview the selected variant inside a mock Section L / Section M solicitation page with text wrap.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewOpen(true)}
+                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-bold uppercase tracking-wide rounded-lg flex items-center gap-2 shrink-0"
+                  >
+                    <FileDoc weight="fill" className="w-3.5 h-3.5" /> Preview in Word
+                  </button>
+                </div>
+              )}
+
               {/* Hero Image (or skeleton / error for selected slot) */}
               <div className={`w-full shadow-2xl rounded-xl overflow-hidden border-4 border-white flex flex-col relative ${isTransparent && selectedSlot?.status === 'done' ? 'bg-zinc-100 pattern-isometric pattern-zinc-200 pattern-size-4 pattern-opacity-100' : 'bg-white'}`}>
                 {selectedSlot?.status === 'done' && selectedSlot.url ? (
@@ -1581,6 +1645,7 @@ export default function App() {
             </motion.div>
           )}
         </AnimatePresence>
+        </div>
       </section>
 
       <PreviewInWord

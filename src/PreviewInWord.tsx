@@ -2,11 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { UploadSimple, FileDoc, Trash } from '@phosphor-icons/react';
 
-// Lorem-flavored placeholder text written to look like a federal proposal
-// paragraph (not actual Latin lorem ipsum so it reads more naturally).
-const PROPOSAL_LOREM = `The proposed approach integrates secure access controls with continuous monitoring, allowing the program office to maintain an audit-traceable posture throughout the period of performance. Our team brings deep familiarity with the agency's existing systems of record, the regulatory environment, and the operational tempo at which engineers and analysts work day to day. We will phase implementation across discovery, validation, and operationalization, with weekly stakeholder syncs and a single accountable program manager. The combined approach reduces transition risk, accelerates time-to-mission-value, and aligns with the evaluation criteria expressed in Section M. Throughout execution, we will instrument our delivery against the FAR and agency-specific standards referenced in the solicitation, and our quality processes are independently audited under ISO 9001 and CMMI Level 3.`;
+// Solicitation-flavored placeholder text. Reads like prose lifted out of a
+// real RFP — Section L instructions plus a proposal-side response — so the
+// user can judge how their graphic flows next to real-feeling content.
+const PROPOSAL_LOREM = `L.4.3 Technical Approach. The Offeror shall describe its proposed approach to satisfying the requirements of Section C in sufficient detail for the Government to assess feasibility, completeness, and risk. The narrative shall address mission alignment, the Offeror's understanding of the operating environment, the approach to phased delivery, and the mechanisms by which transition, sustainment, and knowledge transfer will be ensured. Graphics may be included to clarify the approach but shall not substitute for narrative content; all figures shall be legible at 100% zoom on an 8.5"x11" page and shall include a caption referencing the responsive paragraph.`;
 
-const PROPOSAL_LOREM_2 = `Where appropriate, we will substitute legacy data-handling patterns with modern equivalents that preserve compatibility with existing downstream consumers. Knowledge transfer to the government workforce is built into every phase, supported by living documentation, recorded sessions, and shadowing assignments. The result is a delivery that is repeatable, defensible during oversight review, and prepared for sustainment well beyond the initial period of performance.`;
+const PROPOSAL_LOREM_2 = `In response to L.4.3, our approach phases implementation across discovery, validation, and operationalization, with weekly stakeholder syncs and a single accountable program manager. The model emphasizes audit traceability throughout the period of performance and aligns to the Section M evaluation factors of (1) Technical Soundness, (2) Management Approach, and (3) Past Performance Relevance. Knowledge transfer to the government workforce is embedded in every phase via living documentation, recorded working sessions, and structured shadowing assignments.`;
 
 interface Props {
   open: boolean;
@@ -188,8 +189,8 @@ const PreviewInWord: React.FC<Props> = ({ open, imageUrl, imageName, onClose }) 
                 color: '#0a0a0a',
               }}
             >
-              <h1 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>2.3 Technical Approach</h1>
-              <p style={{ fontSize: 10, color: '#666', fontStyle: 'italic', marginBottom: 14 }}>Section L, Tab C · Page 14 of 25</p>
+              <div style={{ fontSize: 8.5, color: '#666', fontStyle: 'italic', marginBottom: 8, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Solicitation No. AGENCY-25-R-0042 · Volume II — Technical · Page 14 of 25</div>
+              <h1 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, paddingBottom: 4, borderBottom: '1px solid #d4d4d8' }}>L.4.3 Technical Approach</h1>
 
               {effectiveImage ? (
                 wrap === 'left-wrap' ? (
