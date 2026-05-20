@@ -123,7 +123,13 @@ const FLOW_VALUES = ['Linear Phase Model', 'Hierarchical Network', 'Abstract Qua
 const DENSITY_VALUES = ['minimal', 'standard', 'detailed'];
 const ICONOGRAPHY_VALUES = ['USWDS Standard Icons', 'Wireframe Lineart Elements', 'Solid Monochrome'];
 const ACCESSIBILITY_VALUES = ['High Contrast Legibility Mode', 'Flat USWDS CSS Variables'];
-const ORIENTATION_VALUES = ['11x8.5 Landscape', '8.5x11 Portrait', '11x17 Foldout'];
+const ORIENTATION_VALUES = [
+  // Small / inline graphics
+  'Inline Banner', 'Inline Square', 'Inline Tall', 'Process Strip',
+  // Full-page graphics
+  '11x8.5 Landscape', '8.5x11 Portrait', '11x17 Foldout',
+];
+const INLINE_ORIENTATIONS = new Set(['Inline Banner', 'Inline Square', 'Inline Tall', 'Process Strip']);
 
 const variantSchemaProps = {
   type: 'object',
@@ -180,18 +186,26 @@ Rules:
 - Do not include typography, palette, color, density, or iconography instructions in prompt_override — those are passed separately.
 - Stay federal-grade. No stock-photo people, no faux-3D gears, no decorative slop, no playful imagery.
 - Both variations must use a different visual_rhetoric than baseline AND each other.
-- For each variation, pick the orientation that best fits the chosen visual_rhetoric.`;
+- For each variation, pick the orientation that best fits the chosen visual_rhetoric.
+- SIZE FAMILY CONSISTENCY: orientations are split into two families:
+    • Small / inline: Inline Banner, Inline Square, Inline Tall, Process Strip — for in-document mini graphics
+    • Full page: 11x8.5 Landscape, 8.5x11 Portrait, 11x17 Foldout — for primary proposal figures
+  Both variations MUST use an orientation from the SAME family as the baseline. If the user picked an Inline size, both tuned and reimagined must also be Inline sizes (any of the four). If baseline is Full Page, variations must stay Full Page. This keeps the rendered output usable for the intended document position.`;
 
 function deriveHeuristicVariants(base: { flow: string; density: Density; iconography: string; accessibility: string; orientation: string }, topic: string): VariantSettingsPair {
   const nextIn = (arr: string[], cur: string) => arr[(arr.indexOf(cur) + 1) % arr.length] || arr[0];
   const skipIn = (arr: string[], cur: string) => arr[(arr.indexOf(cur) + 2) % arr.length] || arr[0];
+  // Rotate orientation within the user's size family so heuristic variants stay usable.
+  const family = INLINE_ORIENTATIONS.has(base.orientation)
+    ? ['Inline Banner', 'Inline Square', 'Inline Tall', 'Process Strip']
+    : ['11x8.5 Landscape', '8.5x11 Portrait', '11x17 Foldout'];
   return {
     tuned: {
       flow: nextIn(FLOW_VALUES, base.flow),
       density: base.density,
       iconography: base.iconography,
       accessibility: base.accessibility,
-      orientation: nextIn(ORIENTATION_VALUES, base.orientation),
+      orientation: nextIn(family, base.orientation),
       palette: ['#0A2540', '#475569', '#FAF7F2', '#B6442B'],
       typography: 'sans',
       logo_treatment: 'top-left',
@@ -207,7 +221,7 @@ function deriveHeuristicVariants(base: { flow: string; density: Density; iconogr
       density: nextIn(DENSITY_VALUES, base.density) as Density,
       iconography: nextIn(ICONOGRAPHY_VALUES, base.iconography),
       accessibility: nextIn(ACCESSIBILITY_VALUES, base.accessibility),
-      orientation: skipIn(ORIENTATION_VALUES, base.orientation),
+      orientation: skipIn(family, base.orientation),
       palette: ['#0F1A2E', '#C9A24B', '#E8DDC8', '#7A2E2E'],
       typography: 'serif',
       logo_treatment: 'footer-corner',

@@ -9,6 +9,7 @@ import type { VariantOverrides } from './lib/variant-overrides';
 import { api, type PublicUser } from './lib/api';
 import HistoryView from './HistoryView';
 import AdminView from './AdminView';
+import PreviewInWord from './PreviewInWord';
 import {
   PaperPlaneTilt,
   CircleNotch,
@@ -132,6 +133,7 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [view, setView] = useState<'generator' | 'history' | 'admin'>('generator');
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   // Restore session on mount, and listen for 401s anywhere to drop back to login.
   useEffect(() => {
@@ -252,9 +254,15 @@ export default function App() {
     { label: 'Abstract Matrix', value: 'Abstract Quadrant Matrix', desc: 'Relational data grids.' },
   ];
 
-  const orientations = [
-    { label: '11x8.5 Landscape', value: '11x8.5 Landscape', desc: 'Wide page' },
-    { label: '8.5x11 Portrait', value: '8.5x11 Portrait', desc: 'Tall page' },
+  const inlineOrientations = [
+    { label: 'Inline Banner', value: 'Inline Banner', desc: 'Wide & short' },
+    { label: 'Inline Square', value: 'Inline Square', desc: '1:1 concept icon' },
+    { label: 'Inline Tall', value: 'Inline Tall', desc: 'Column / sidebar' },
+    { label: 'Process Strip', value: 'Process Strip', desc: 'Section band' },
+  ];
+  const fullPageOrientations = [
+    { label: '11x8.5 Landscape', value: '11x8.5 Landscape', desc: 'Wide letter' },
+    { label: '8.5x11 Portrait', value: '8.5x11 Portrait', desc: 'Tall letter' },
     { label: '11x17 Foldout', value: '11x17 Foldout', desc: 'Tabloid spread' },
   ];
 
@@ -778,6 +786,14 @@ export default function App() {
             <div className="flex items-center gap-1">
               <button
                 type="button"
+                onClick={() => setPreviewOpen(true)}
+                className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 rounded transition-all"
+                title="Preview a graphic in a Word-page mockup"
+              >
+                Preview
+              </button>
+              <button
+                type="button"
                 onClick={() => setView('history')}
                 className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 rounded transition-all"
                 title="View your past renders"
@@ -1265,19 +1281,36 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Orientation */}
-                  <div className="flex flex-col gap-2.5">
+                  {/* Page Size & Layout */}
+                  <div className="flex flex-col gap-3">
                     <label className="text-[12px] font-semibold text-zinc-800 tracking-wide flex items-center gap-2">
-                      <FrameCorners className="w-3.5 h-3.5 text-zinc-500" /> Page Orientation
+                      <FrameCorners className="w-3.5 h-3.5 text-zinc-500" /> Page Size & Layout
                     </label>
-                    <div className="flex gap-2">
-                      {orientations.map((o) => (
-                        <label key={o.value} className={`flex-1 relative flex flex-col items-center justify-center p-2.5 rounded-lg border cursor-pointer transition-all hover:bg-zinc-50 ${orientation === o.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white border-zinc-200'}`}>
-                          <input type="radio" value={o.value} checked={orientation === o.value} onChange={(e) => setOrientation(e.target.value)} className="hidden" />
-                          <span className="text-[11px] font-bold text-zinc-800 tracking-tight text-center leading-none mb-1">{o.label}</span>
-                          <span className="text-[9px] text-zinc-500 font-medium text-center leading-[1.1] opacity-80">{o.desc}</span>
-                        </label>
-                      ))}
+
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[9px] font-bold tracking-widest text-zinc-400 uppercase">Small / Inline graphics</span>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {inlineOrientations.map((o) => (
+                          <label key={o.value} className={`relative flex flex-col items-center justify-center p-2 rounded-lg border cursor-pointer transition-all hover:bg-zinc-50 ${orientation === o.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white border-zinc-200'}`}>
+                            <input type="radio" value={o.value} checked={orientation === o.value} onChange={(e) => setOrientation(e.target.value)} className="hidden" />
+                            <span className="text-[10px] font-bold text-zinc-800 tracking-tight text-center leading-none mb-1">{o.label}</span>
+                            <span className="text-[9px] text-zinc-500 font-medium text-center leading-[1.1] opacity-80">{o.desc}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[9px] font-bold tracking-widest text-zinc-400 uppercase">Full-page graphics</span>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {fullPageOrientations.map((o) => (
+                          <label key={o.value} className={`relative flex flex-col items-center justify-center p-2.5 rounded-lg border cursor-pointer transition-all hover:bg-zinc-50 ${orientation === o.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white border-zinc-200'}`}>
+                            <input type="radio" value={o.value} checked={orientation === o.value} onChange={(e) => setOrientation(e.target.value)} className="hidden" />
+                            <span className="text-[11px] font-bold text-zinc-800 tracking-tight text-center leading-none mb-1">{o.label}</span>
+                            <span className="text-[9px] text-zinc-500 font-medium text-center leading-[1.1] opacity-80">{o.desc}</span>
+                          </label>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </Drawer>
@@ -1429,6 +1462,14 @@ export default function App() {
                     >
                       {isRevising ? 'Cancel Edit' : 'Revise Variant'}
                     </button>
+                    <button
+                      onClick={() => setPreviewOpen(true)}
+                      disabled={selectedSlot?.status !== 'done'}
+                      className="px-2 py-1 text-[10px] uppercase tracking-wider rounded transition-colors font-bold cursor-pointer border bg-transparent border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 disabled:opacity-30 disabled:cursor-not-allowed"
+                      title="See how this variant looks placed inside a Word document"
+                    >
+                      Preview in Word
+                    </button>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-zinc-600 text-xs font-mono font-medium mr-1.5 hidden md:block">EXPORT</span>
@@ -1523,6 +1564,12 @@ export default function App() {
         </AnimatePresence>
       </section>
 
+      <PreviewInWord
+        open={previewOpen}
+        imageUrl={selectedSlot?.status === 'done' ? selectedSlot.url || null : null}
+        imageName={selectedSlot ? `Variant ${selectedSlotIndex + 1} · ${engineLabel(selectedSlot.engine)} · ${variationLabel(selectedSlot.variation)}` : undefined}
+        onClose={() => setPreviewOpen(false)}
+      />
     </div>
   );
 }

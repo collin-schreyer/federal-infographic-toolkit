@@ -11,8 +11,18 @@ const dataUrlToBlob = (dataUrl: string): Blob => {
   return new Blob([binary], { type: mimeType });
 };
 
+// All sizes must satisfy gpt-image-2 constraints: multiples of 16, long:short
+// ratio ≤ 3:1, total pixels in [655,360, 8,294,400]. The "Inline" family is
+// for small in-document graphics; the "Full Page" family is for primary
+// proposal figures.
 const orientationToSize = (orientation: string): string => {
   const o = orientation.toLowerCase();
+  // Small / inline graphics
+  if (o.includes('inline banner')) return '1280x528';      // ~2.42:1 — wide & short
+  if (o.includes('inline square')) return '1024x1024';     // 1:1 — concept icon
+  if (o.includes('inline tall')) return '800x1248';        // ~1:1.56 — column callout
+  if (o.includes('process strip')) return '1504x512';      // ~2.94:1 — section divider
+  // Full-page graphics
   if (o.includes('11x17')) return '1024x1584';
   if (o.includes('landscape')) return '1328x1024';
   if (o.includes('portrait')) return '1024x1328';
