@@ -134,6 +134,7 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [view, setView] = useState<'generator' | 'history' | 'admin'>('generator');
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [exampleModal, setExampleModal] = useState<{ label: string; src: string } | null>(null);
 
   // Restore session on mount, and listen for 401s anywhere to drop back to login.
   useEffect(() => {
@@ -254,16 +255,18 @@ export default function App() {
     { label: 'Abstract Matrix', value: 'Abstract Quadrant Matrix', desc: 'Relational data grids.' },
   ];
 
+  // Example PNGs ship as static assets in public/examples/. Slug mirrors the
+  // generate-size-examples.mjs script so the two stay in sync.
   const inlineOrientations = [
-    { label: 'Inline Banner', value: 'Inline Banner', desc: 'Wide & short' },
-    { label: 'Inline Square', value: 'Inline Square', desc: '1:1 concept icon' },
-    { label: 'Inline Tall', value: 'Inline Tall', desc: 'Column / sidebar' },
-    { label: 'Process Strip', value: 'Process Strip', desc: 'Section band' },
+    { label: 'Inline Banner', value: 'Inline Banner', desc: 'Wide & short', example: '/examples/inline-banner.png' },
+    { label: 'Inline Square', value: 'Inline Square', desc: '1:1 concept icon', example: '/examples/inline-square.png' },
+    { label: 'Inline Tall', value: 'Inline Tall', desc: 'Column / sidebar', example: '/examples/inline-tall.png' },
+    { label: 'Process Strip', value: 'Process Strip', desc: 'Section band', example: '/examples/process-strip.png' },
   ];
   const fullPageOrientations = [
-    { label: '11x8.5 Landscape', value: '11x8.5 Landscape', desc: 'Wide letter' },
-    { label: '8.5x11 Portrait', value: '8.5x11 Portrait', desc: 'Tall letter' },
-    { label: '11x17 Foldout', value: '11x17 Foldout', desc: 'Tabloid spread' },
+    { label: '11x8.5 Landscape', value: '11x8.5 Landscape', desc: 'Wide letter', example: '/examples/11x85-landscape.png' },
+    { label: '8.5x11 Portrait', value: '8.5x11 Portrait', desc: 'Tall letter', example: '/examples/85x11-portrait.png' },
+    { label: '11x17 Foldout', value: '11x17 Foldout', desc: 'Tabloid spread', example: '/examples/11x17-foldout.png' },
   ];
 
   const accessibilities = [
@@ -1291,10 +1294,18 @@ export default function App() {
                       <span className="text-[9px] font-bold tracking-widest text-zinc-400 uppercase">Small / Inline graphics</span>
                       <div className="grid grid-cols-4 gap-1.5">
                         {inlineOrientations.map((o) => (
-                          <label key={o.value} className={`relative flex flex-col items-center justify-center p-2 rounded-lg border cursor-pointer transition-all hover:bg-zinc-50 ${orientation === o.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white border-zinc-200'}`}>
+                          <label key={o.value} className={`relative flex flex-col items-center justify-center p-2 pt-2 rounded-lg border cursor-pointer transition-all hover:bg-zinc-50 ${orientation === o.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white border-zinc-200'}`}>
                             <input type="radio" value={o.value} checked={orientation === o.value} onChange={(e) => setOrientation(e.target.value)} className="hidden" />
                             <span className="text-[10px] font-bold text-zinc-800 tracking-tight text-center leading-none mb-1">{o.label}</span>
                             <span className="text-[9px] text-zinc-500 font-medium text-center leading-[1.1] opacity-80">{o.desc}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setExampleModal({ label: o.label, src: o.example }); }}
+                              className="absolute top-0.5 right-0.5 text-zinc-300 hover:text-zinc-950 hover:bg-zinc-100 p-0.5 rounded"
+                              title={`See an example ${o.label}`}
+                            >
+                              <PhosphorImage className="w-3 h-3" />
+                            </button>
                           </label>
                         ))}
                       </div>
@@ -1308,6 +1319,14 @@ export default function App() {
                             <input type="radio" value={o.value} checked={orientation === o.value} onChange={(e) => setOrientation(e.target.value)} className="hidden" />
                             <span className="text-[11px] font-bold text-zinc-800 tracking-tight text-center leading-none mb-1">{o.label}</span>
                             <span className="text-[9px] text-zinc-500 font-medium text-center leading-[1.1] opacity-80">{o.desc}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setExampleModal({ label: o.label, src: o.example }); }}
+                              className="absolute top-0.5 right-0.5 text-zinc-300 hover:text-zinc-950 hover:bg-zinc-100 p-0.5 rounded"
+                              title={`See an example ${o.label}`}
+                            >
+                              <PhosphorImage className="w-3 h-3" />
+                            </button>
                           </label>
                         ))}
                       </div>
@@ -1570,6 +1589,29 @@ export default function App() {
         imageName={selectedSlot ? `Variant ${selectedSlotIndex + 1} · ${engineLabel(selectedSlot.engine)} · ${variationLabel(selectedSlot.variation)}` : undefined}
         onClose={() => setPreviewOpen(false)}
       />
+
+      {/* Example-size preview modal */}
+      {exampleModal && (
+        <div onClick={() => setExampleModal(null)} className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6 cursor-pointer">
+          <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-xl overflow-hidden max-w-4xl w-full max-h-[90vh] flex flex-col cursor-default">
+            <div className="px-5 py-3 border-b border-zinc-200 flex items-center justify-between">
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[9px] font-bold tracking-widest uppercase text-zinc-500">Example · generic placeholder</span>
+                <h2 className="text-sm font-bold text-zinc-950">{exampleModal.label}</h2>
+              </div>
+              <button onClick={() => setExampleModal(null)} className="text-zinc-500 hover:text-zinc-950 text-xl leading-none px-2">×</button>
+            </div>
+            <div className="flex-1 overflow-y-auto bg-zinc-100 p-6 flex items-center justify-center">
+              <img src={exampleModal.src} alt={`${exampleModal.label} example`} className="max-w-full max-h-[70vh] object-contain rounded shadow-lg" />
+            </div>
+            <div className="px-5 py-3 border-t border-zinc-200 bg-white">
+              <p className="text-[11px] text-zinc-500 italic leading-snug">
+                This is a generic example showing the typical shape and density for a <span className="font-semibold not-italic">{exampleModal.label}</span> rendering. Your actual graphic will reflect your topic, palette, typography, and other settings.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
