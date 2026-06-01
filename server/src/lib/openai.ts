@@ -3,6 +3,21 @@ import { fontDescriptor, backgroundClause, logoClause } from './variant-override
 
 const OPENAI_IMAGE_MODEL = 'gpt-image-2';
 
+// Hard cap on any single image-generation call. gpt-image-2 normally finishes
+// in 10-45s; if we're still waiting after 2 minutes, the upstream is hung
+// and we want to surface that as a clear error rather than block forever.
+const IMAGE_TIMEOUT_MS = 120_000;
+
+const fetchWithTimeout = async (url: string, init: RequestInit, ms: number) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 const dataUrlToBlob = (dataUrl: string): Blob => {
   const [header, base64Data] = dataUrl.split(',');
   const mimeMatch = header.match(/:([^;]+);/);
@@ -129,11 +144,19 @@ Output ONLY the high-fidelity image composition. No surrounding text.`;
       form.append('image[]', dataUrlToBlob(logoUrl), 'logo.png');
     }
 
-    const response = await fetch('https://api.openai.com/v1/images/edits', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: form,
-    });
+    let response: Response;
+    try {
+      response = await fetchWithTimeout('https://api.openai.com/v1/images/edits', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+      }, IMAGE_TIMEOUT_MS);
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        throw new Error(`OpenAI image edit timed out after ${IMAGE_TIMEOUT_MS / 1000}s. The upstream model is stuck; please re-run.`);
+      }
+      throw e;
+    }
 
     if (!response.ok) {
       const errText = await response.text();
@@ -148,14 +171,22 @@ Output ONLY the high-fidelity image composition. No surrounding text.`;
   const body: Record<string, unknown> = { model: OPENAI_IMAGE_MODEL, prompt, n: 1, size };
   if (isTransparent) body.background = 'transparent';
 
-  const response = await fetch('https://api.openai.com/v1/images/generations', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetchWithTimeout('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+    }, IMAGE_TIMEOUT_MS);
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new Error(`OpenAI image generation timed out after ${IMAGE_TIMEOUT_MS / 1000}s. The upstream model is stuck; please re-run.`);
+    }
+    throw e;
+  }
 
   if (!response.ok) {
     const errText = await response.text();

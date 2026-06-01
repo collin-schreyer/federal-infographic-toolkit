@@ -1,6 +1,18 @@
 import type { VariantOverrides } from './variant-overrides.js';
 import { fontDescriptor, backgroundClause, logoClause } from './variant-overrides.js';
 
+const IMAGE_TIMEOUT_MS = 120_000;
+
+const fetchWithTimeout = async (url: string, init: RequestInit, ms: number) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 export interface GeminiRenderInput {
   topic: string;
   colors: string[];
@@ -101,14 +113,23 @@ Do NOT generate any text explanation. ONLY output the high-fidelity image compos
     requestParts.push({ inlineData: { mimeType, data: base64Data } });
   }
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/nano-banana-pro-preview:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: requestParts }], generationConfig: { temperature: 0.4 } }),
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      `https://generativelanguage.googleapis.com/v1beta/models/nano-banana-pro-preview:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: requestParts }], generationConfig: { temperature: 0.4 } }),
+      },
+      IMAGE_TIMEOUT_MS,
+    );
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new Error(`Gemini image generation timed out after ${IMAGE_TIMEOUT_MS / 1000}s. Please re-run.`);
     }
-  );
+    throw e;
+  }
 
   if (!response.ok) {
     const errText = await response.text();

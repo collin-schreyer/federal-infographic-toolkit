@@ -701,9 +701,14 @@ export default function App() {
         undefined,
         signal
       ).then(url => {
+        // If the user cancelled (or kicked off a brand-new run) while this
+        // fetch was still in flight, the captured signal is now aborted.
+        // Ignoring the late-arriving success prevents stale renders from
+        // clobbering whatever's in slots from a subsequent run.
+        if (signal.aborted) return;
         setSlots(prev => prev.map((s, i) => i === idx ? { ...s, status: 'done', url } : s));
       }).catch(err => {
-        // If the AbortController fired, leave the slot in whatever 'cancelled'
+        // Same guard for failure: leave the slot in whatever 'cancelled'
         // state handleCancel set; don't overwrite to 'error'.
         if (err?.name === 'AbortError' || signal.aborted) return;
         console.error(`Slot ${idx} (${slotSnapshot.engine}, ${slotSnapshot.variation}) failed:`, err);
