@@ -728,7 +728,7 @@ export default function App() {
     // Skip entirely if the user only asked for baselines.
     if (!planNeeded) return;
     (async () => {
-      console.log('[plan] firing GPT-5 variant-settings call (reasoning_effort: high)...');
+      console.log('[plan] firing GPT-5 variant-settings call...');
       const t0 = Date.now();
       let variantPair: { tuned: GptVariantSettings; reimagined: GptVariantSettings };
       try {

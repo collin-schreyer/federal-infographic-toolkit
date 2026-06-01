@@ -300,7 +300,7 @@ export async function getVariantSettings(input: VariantSettingsInput): Promise<V
   userParts.push('Produce the two alternate variation plans now.');
 
   try {
-    console.log('[variant-settings] calling GPT-5 with reasoning_effort: high...');
+    console.log('[variant-settings] calling GPT-5 with reasoning_effort: low...');
     const t0 = Date.now();
     const raw = await callChat({
       model: GPT5_MODEL,
@@ -312,10 +312,12 @@ export async function getVariantSettings(input: VariantSettingsInput): Promise<V
         type: 'json_schema',
         json_schema: { name: 'variant_settings_pair', strict: true, schema: VARIANT_SETTINGS_SCHEMA },
       },
-      // 'high' was burning 90-120s per plan call. 'medium' is roughly 3x
-      // faster (~30-60s) while still producing strong reinterpretations.
-      // Bump back to 'high' if Reimagined starts feeling tame.
-      reasoning_effort: 'medium',
+      // 'high' burned 90-120s; 'medium' was still hitting 90-115s on dense
+      // prompts. 'low' lands in 15-30s typical and still produces credible
+      // Tuned/Reimagined reinterpretations because the schema is constrained
+      // (pick from a small palette enum, an orientation enum, etc.).
+      // Bump back to 'medium' or 'high' if quality regresses.
+      reasoning_effort: 'low',
     });
     console.log(`[variant-settings] returned in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     const parsed = JSON.parse(raw) as VariantSettingsPair;

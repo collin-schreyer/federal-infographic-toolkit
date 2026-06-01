@@ -1,7 +1,7 @@
 import type { VariantOverrides } from './variant-overrides.js';
 import { fontDescriptor, backgroundClause, logoClause } from './variant-overrides.js';
 
-const IMAGE_TIMEOUT_MS = 120_000;
+const IMAGE_TIMEOUT_MS = 150_000;
 
 const fetchWithTimeout = async (url: string, init: RequestInit, ms: number) => {
   const controller = new AbortController();

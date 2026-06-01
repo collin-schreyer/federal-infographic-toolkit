@@ -4,9 +4,10 @@ import { fontDescriptor, backgroundClause, logoClause } from './variant-override
 const OPENAI_IMAGE_MODEL = 'gpt-image-2';
 
 // Hard cap on any single image-generation call. gpt-image-2 normally finishes
-// in 10-45s; if we're still waiting after 2 minutes, the upstream is hung
-// and we want to surface that as a clear error rather than block forever.
-const IMAGE_TIMEOUT_MS = 120_000;
+// in 10-45s but dense reimaginings at large sizes can legitimately push past
+// 90s. 150s gives slow-but-valid renders room to finish while still failing
+// cleanly on a true upstream hang.
+const IMAGE_TIMEOUT_MS = 150_000;
 
 const fetchWithTimeout = async (url: string, init: RequestInit, ms: number) => {
   const controller = new AbortController();
