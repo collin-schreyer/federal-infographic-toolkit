@@ -1,7 +1,33 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { CircleNotch, CaretLeft, Trash, Plus, Copy, WarningCircle, ArrowsClockwise } from '@phosphor-icons/react';
+import { CircleNotch, CaretLeft, Trash, Plus, Copy, WarningCircle, ArrowsClockwise, ChartBar, DownloadSimple } from '@phosphor-icons/react';
 import { api, type PublicUser } from './lib/api';
+
+interface UsageRow {
+  id: string;
+  email: string;
+  name: string | null;
+  role: 'admin' | 'user';
+  created_at: number;
+  total_renders: number;
+  renders_openai: number;
+  renders_gemini: number;
+  renders_baseline: number;
+  renders_tuned: number;
+  renders_reimagined: number;
+  last_active_at: number | null;
+  estimated_spend_usd: number;
+}
+
+interface UsageTotals {
+  total_renders: number;
+  renders_openai: number;
+  renders_gemini: number;
+  renders_baseline: number;
+  renders_tuned: number;
+  renders_reimagined: number;
+  estimated_spend_usd: number;
+}
 
 interface Props {
   currentUser: PublicUser;
@@ -14,6 +40,9 @@ const AdminView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [usage, setUsage] = useState<UsageRow[]>([]);
+  const [usageTotals, setUsageTotals] = useState<UsageTotals | null>(null);
+  const [usageLoading, setUsageLoading] = useState(true);
 
   // Create-user form
   const [newEmail, setNewEmail] = useState('');
@@ -35,7 +64,35 @@ const AdminView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
     }
   };
 
-  useEffect(() => { refresh(); }, []);
+  const refreshUsage = async () => {
+    setUsageLoading(true);
+    try {
+      const data = await api.get<{ usage: UsageRow[]; totals: UsageTotals }>('/api/admin/usage');
+      setUsage(data.usage);
+      setUsageTotals(data.totals);
+    } catch (err: any) {
+      // Non-blocking: surface in the section but don't trash the whole page.
+      console.warn('[usage] load failed:', err);
+    } finally {
+      setUsageLoading(false);
+    }
+  };
+
+  useEffect(() => { refresh(); refreshUsage(); }, []);
+
+  const downloadCsv = async () => {
+    const res = await fetch('/api/admin/usage?format=csv', { credentials: 'include' });
+    if (!res.ok) { alert('Failed to download CSV.'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fit-usage-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const fmtDate = (ts: number | null) => ts ? new Date(ts).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '—';
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -219,6 +276,100 @@ const AdminView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
               </tbody>
             </table>
           )}
+        </section>
+
+        {/* Usage tracking */}
+        <section className="bg-white border border-zinc-200 rounded-xl">
+          <div className="px-5 py-4 border-b border-zinc-200 flex items-center justify-between">
+            <h2 className="text-[11px] font-bold tracking-widest uppercase text-zinc-900 flex items-center gap-2">
+              <ChartBar weight="fill" className="w-3.5 h-3.5" /> Usage
+            </h2>
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-mono text-zinc-400">
+                {usageTotals ? `${usageTotals.total_renders} renders · ~$${usageTotals.estimated_spend_usd.toFixed(2)} est.` : ''}
+              </span>
+              <button
+                type="button"
+                onClick={refreshUsage}
+                disabled={usageLoading}
+                className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 hover:text-zinc-900 disabled:opacity-40 flex items-center gap-1"
+                title="Refresh usage data"
+              >
+                <ArrowsClockwise weight="bold" className={`w-3 h-3 ${usageLoading ? 'animate-spin' : ''}`} /> Refresh
+              </button>
+              <button
+                type="button"
+                onClick={downloadCsv}
+                className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 hover:text-zinc-900 flex items-center gap-1"
+                title="Download usage CSV"
+              >
+                <DownloadSimple weight="bold" className="w-3 h-3" /> CSV
+              </button>
+            </div>
+          </div>
+          {usageLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <CircleNotch weight="bold" className="w-6 h-6 text-zinc-400 animate-spin" />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="text-[9px] font-bold tracking-widest uppercase text-zinc-500 border-b border-zinc-100">
+                    <th className="text-left px-5 py-3">User</th>
+                    <th className="text-right px-3 py-3">Total</th>
+                    <th className="text-right px-3 py-3" title="Variants rendered with OpenAI gpt-image-2">GPT</th>
+                    <th className="text-right px-3 py-3" title="Variants rendered with Google Nano Banana">Gem</th>
+                    <th className="text-right px-3 py-3" title="Baseline variants (your settings as-is)">Base</th>
+                    <th className="text-right px-3 py-3" title="Tuned variants (AI-refined)">Tuned</th>
+                    <th className="text-right px-3 py-3" title="Reimagined variants (AI-reinterpreted)">Reim</th>
+                    <th className="text-right px-3 py-3">Last active</th>
+                    <th className="text-right px-5 py-3" title="Rough estimate at $0.04 per variant. Excludes GPT-5 planning/summary cost.">Est. spend</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usage.map(u => (
+                    <tr key={u.id} className="border-b border-zinc-100 last:border-0 hover:bg-zinc-50 transition-colors">
+                      <td className="px-5 py-3">
+                        <div className="flex flex-col">
+                          <span className="text-[12px] font-medium text-zinc-900">{u.email}</span>
+                          {(u.name || u.role === 'admin') && (
+                            <span className="text-[9px] font-mono text-zinc-500">
+                              {u.name || ''}{u.name && u.role === 'admin' ? ' · ' : ''}{u.role === 'admin' ? 'admin' : ''}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 text-right text-[12px] font-mono font-bold text-zinc-900">{u.total_renders}</td>
+                      <td className="px-3 py-3 text-right text-[11px] font-mono text-emerald-700">{u.renders_openai}</td>
+                      <td className="px-3 py-3 text-right text-[11px] font-mono text-blue-700">{u.renders_gemini}</td>
+                      <td className="px-3 py-3 text-right text-[11px] font-mono text-zinc-700">{u.renders_baseline}</td>
+                      <td className="px-3 py-3 text-right text-[11px] font-mono text-amber-700">{u.renders_tuned}</td>
+                      <td className="px-3 py-3 text-right text-[11px] font-mono text-purple-700">{u.renders_reimagined}</td>
+                      <td className="px-3 py-3 text-right text-[10px] font-mono text-zinc-500">{fmtDate(u.last_active_at)}</td>
+                      <td className="px-5 py-3 text-right text-[11px] font-mono text-zinc-700">${u.estimated_spend_usd.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                  {usageTotals && usage.length > 0 && (
+                    <tr className="border-t-2 border-zinc-300 bg-zinc-50">
+                      <td className="px-5 py-3 text-[11px] font-bold tracking-widest uppercase text-zinc-700">Totals</td>
+                      <td className="px-3 py-3 text-right text-[12px] font-mono font-bold text-zinc-900">{usageTotals.total_renders}</td>
+                      <td className="px-3 py-3 text-right text-[11px] font-mono text-emerald-700">{usageTotals.renders_openai}</td>
+                      <td className="px-3 py-3 text-right text-[11px] font-mono text-blue-700">{usageTotals.renders_gemini}</td>
+                      <td className="px-3 py-3 text-right text-[11px] font-mono text-zinc-700">{usageTotals.renders_baseline}</td>
+                      <td className="px-3 py-3 text-right text-[11px] font-mono text-amber-700">{usageTotals.renders_tuned}</td>
+                      <td className="px-3 py-3 text-right text-[11px] font-mono text-purple-700">{usageTotals.renders_reimagined}</td>
+                      <td className="px-3 py-3"></td>
+                      <td className="px-5 py-3 text-right text-[11px] font-mono font-bold text-zinc-900">${usageTotals.estimated_spend_usd.toFixed(2)}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="px-5 py-3 border-t border-zinc-100 text-[10px] text-zinc-500 italic leading-snug">
+            Est. spend assumes $0.04 per rendered variant (rough average across gpt-image-2 and nano-banana). Excludes GPT-5 planning (only when Tuned/Reimagined are enabled) and context-summary calls. For exact billing, check your OpenAI and Google Cloud dashboards.
+          </div>
         </section>
       </main>
     </div>

@@ -5,6 +5,95 @@ import { db, toPublicUser, type DbUser, type PublicUser } from '../db.js';
 
 const users = new Hono();
 
+// Rough per-render cost estimate. Combines: one image generation call
+// (gpt-image-2 ~$0.04 OR nano-banana ~$0.04), plus amortized GPT-5 planning
+// when tuned/reimagined variants are involved. Document in the UI as a
+// rough number, not an invoice line item.
+const COST_PER_RENDER_USD = 0.04;
+
+// Aggregate usage stats per user. Returned as both JSON (default) and CSV
+// (when ?format=csv). Admin only — leaks user emails + activity.
+users.get('/admin/usage', requireAdmin, (c) => {
+  const rows = db.prepare(`
+    SELECT
+      u.id                                         as id,
+      u.email                                      as email,
+      u.name                                       as name,
+      u.role                                       as role,
+      u.created_at                                 as created_at,
+      COALESCE(COUNT(r.id), 0)                     as total_renders,
+      COALESCE(SUM(CASE WHEN r.engine = 'openai' THEN 1 ELSE 0 END), 0)  as renders_openai,
+      COALESCE(SUM(CASE WHEN r.engine = 'gemini' THEN 1 ELSE 0 END), 0)  as renders_gemini,
+      COALESCE(SUM(CASE WHEN r.variation = 'baseline'   THEN 1 ELSE 0 END), 0) as renders_baseline,
+      COALESCE(SUM(CASE WHEN r.variation = 'tuned'      THEN 1 ELSE 0 END), 0) as renders_tuned,
+      COALESCE(SUM(CASE WHEN r.variation = 'reimagined' THEN 1 ELSE 0 END), 0) as renders_reimagined,
+      MAX(r.created_at)                            as last_active_at
+    FROM users u
+    LEFT JOIN renders r ON r.user_id = u.id
+    GROUP BY u.id
+    ORDER BY total_renders DESC, u.created_at DESC
+  `).all() as Array<{
+    id: string; email: string; name: string | null; role: string;
+    created_at: number;
+    total_renders: number; renders_openai: number; renders_gemini: number;
+    renders_baseline: number; renders_tuned: number; renders_reimagined: number;
+    last_active_at: number | null;
+  }>;
+
+  const usage = rows.map(r => ({
+    ...r,
+    estimated_spend_usd: Number((r.total_renders * COST_PER_RENDER_USD).toFixed(2)),
+  }));
+
+  const totals = usage.reduce(
+    (acc, u) => {
+      acc.total_renders += u.total_renders;
+      acc.renders_openai += u.renders_openai;
+      acc.renders_gemini += u.renders_gemini;
+      acc.renders_baseline += u.renders_baseline;
+      acc.renders_tuned += u.renders_tuned;
+      acc.renders_reimagined += u.renders_reimagined;
+      acc.estimated_spend_usd += u.estimated_spend_usd;
+      return acc;
+    },
+    { total_renders: 0, renders_openai: 0, renders_gemini: 0, renders_baseline: 0, renders_tuned: 0, renders_reimagined: 0, estimated_spend_usd: 0 }
+  );
+
+  if (c.req.query('format') === 'csv') {
+    const csvEscape = (v: unknown) => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const headers = ['email', 'name', 'role', 'created_at_iso', 'last_active_iso', 'total_renders', 'renders_openai', 'renders_gemini', 'renders_baseline', 'renders_tuned', 'renders_reimagined', 'estimated_spend_usd'];
+    const lines = [headers.join(',')];
+    for (const u of usage) {
+      lines.push([
+        u.email,
+        u.name || '',
+        u.role,
+        new Date(u.created_at).toISOString(),
+        u.last_active_at ? new Date(u.last_active_at).toISOString() : '',
+        u.total_renders,
+        u.renders_openai,
+        u.renders_gemini,
+        u.renders_baseline,
+        u.renders_tuned,
+        u.renders_reimagined,
+        u.estimated_spend_usd.toFixed(2),
+      ].map(csvEscape).join(','));
+    }
+    return new Response(lines.join('\n'), {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="fit-usage-${new Date().toISOString().slice(0, 10)}.csv"`,
+      },
+    });
+  }
+
+  return c.json({ usage, totals, cost_per_render_usd: COST_PER_RENDER_USD });
+});
+
 users.get('/users', requireAdmin, (c) => {
   const rows = db.prepare(
     `SELECT id, email, name, password_hash, role, must_change_password,
