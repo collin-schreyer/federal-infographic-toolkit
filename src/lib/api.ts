@@ -15,6 +15,7 @@ async function apiFetch<T>(
   method: string,
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const headers: Record<string, string> = {};
   let payload: BodyInit | undefined;
@@ -27,6 +28,7 @@ async function apiFetch<T>(
     headers,
     body: payload,
     credentials: 'include',
+    signal,
   });
   if (res.status === 401) {
     window.dispatchEvent(new CustomEvent('fit:unauthorized'));
@@ -42,10 +44,10 @@ async function apiFetch<T>(
 }
 
 export const api = {
-  get:    <T>(p: string)              => apiFetch<T>('GET',    p),
-  post:   <T>(p: string, body?: any)  => apiFetch<T>('POST',   p, body),
-  patch:  <T>(p: string, body?: any)  => apiFetch<T>('PATCH',  p, body),
-  delete: <T>(p: string)              => apiFetch<T>('DELETE', p),
+  get:    <T>(p: string,             signal?: AbortSignal) => apiFetch<T>('GET',    p,    undefined, signal),
+  post:   <T>(p: string, body?: any, signal?: AbortSignal) => apiFetch<T>('POST',   p, body, signal),
+  patch:  <T>(p: string, body?: any, signal?: AbortSignal) => apiFetch<T>('PATCH',  p, body, signal),
+  delete: <T>(p: string,             signal?: AbortSignal) => apiFetch<T>('DELETE', p,    undefined, signal),
 };
 
 // ------- Types shared with the server (mirrored manually) -------

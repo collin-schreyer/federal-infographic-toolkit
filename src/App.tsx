@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { generateInfographicImage as generateGeminiImage } from './lib/gemini';
 import { generateInfographicImage as generateOpenAIImage } from './lib/openai';
 import { parsePptx } from './lib/parse-pptx';
+import type { ParsedDeck, ParsedSlide } from './lib/parse-pptx';
 import { summarizeReference, suggestPromptFromImage, getVariantSettings } from './lib/gpt5';
 import type { VariantSettings as GptVariantSettings } from './lib/gpt5';
 import type { VariantOverrides } from './lib/variant-overrides';
@@ -55,7 +56,7 @@ interface SlotSettings {
   orientation: string;
 }
 
-type SlotStatus = 'planning' | 'rendering' | 'done' | 'error';
+type SlotStatus = 'planning' | 'rendering' | 'done' | 'error' | 'cancelled';
 
 interface VariantSlot {
   engine: Engine;
@@ -176,6 +177,9 @@ export default function App() {
 
   const [topic, setTopic] = useState('');
   const [slots, setSlots] = useState<VariantSlot[]>([]);
+  // AbortController for the in-flight render batch. Allocated at the start of
+  // handleGenerate and aborted by handleCancel. Re-allocated on every new run.
+  const abortRef = useRef<AbortController | null>(null);
   const [selectedSlotIndex, setSelectedSlotIndex] = useState<number>(0);
   const [error, setError] = useState('');
   const [isRevising, setIsRevising] = useState<boolean>(false);
@@ -211,10 +215,11 @@ export default function App() {
     if (isInlineSize && density !== 'minimal') setDensity('minimal');
   }, [orientation, isInlineSize, density]);
 
-  // Reference Material: source text + a short GPT-5 summary the user can see.
+  // Reference Material: per-slide deck (or single-"slide" wrapper around pasted text).
   type SourceKind = 'pptx' | 'text';
   const [sourceKind, setSourceKind] = useState<SourceKind>('pptx');
-  const [sourceText, setSourceText] = useState<string>('');
+  const [parsedDeck, setParsedDeck] = useState<ParsedDeck | null>(null);
+  const [selectedSlideIndex, setSelectedSlideIndex] = useState<number>(0);
   const [sourceName, setSourceName] = useState<string>('');
   const [sourceMeta, setSourceMeta] = useState<string>('');
   const [sourceParseLoading, setSourceParseLoading] = useState(false);
@@ -222,6 +227,14 @@ export default function App() {
   const [pastedText, setPastedText] = useState('');
   const [contextSummary, setContextSummary] = useState<string>('');
   const [contextSummaryLoading, setContextSummaryLoading] = useState(false);
+
+  // Derived: which slide the user is currently focused on, and the text/images
+  // that will flow downstream as reference context.
+  const selectedSlide = parsedDeck?.slides[selectedSlideIndex] ?? null;
+  const sourceText = selectedSlide
+    ? `Slide ${selectedSlide.index}: ${selectedSlide.text}${selectedSlide.notes ? ` (notes: ${selectedSlide.notes})` : ''}`.trim()
+    : '';
+  const sourceImages = selectedSlide ? selectedSlide.images.map(i => i.dataUrl) : [];
 
   // Style Reference: upload an existing graphic, get a suggested Proposal Subject.
   const [styleRefDataUrl, setStyleRefDataUrl] = useState<string | null>(null);
@@ -370,6 +383,21 @@ export default function App() {
 
   // Kick off a short GPT-5 summary so the user can see what was captured.
   // Fires automatically after a successful parse/paste.
+  // Auto-fire a fresh GPT-5 summary whenever the user picks a new slide (or
+  // first uploads). Debounces naturally via the selected-slide identity.
+  useEffect(() => {
+    if (!selectedSlide) {
+      setContextSummary('');
+      return;
+    }
+    if (!selectedSlide.text.trim() && selectedSlide.images.length === 0) {
+      setContextSummary('');
+      return;
+    }
+    runContextSummary(sourceText, sourceImages);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parsedDeck, selectedSlideIndex]);
+
   const runContextSummary = async (text: string, images: string[]) => {
     if (!text.trim() && images.length === 0) return;
     setContextSummary('');
@@ -401,19 +429,21 @@ export default function App() {
 
     try {
       const parsed = await parsePptx(file);
-      console.log('[upload] Parsed successfully:', { slides: parsed.slideCount, chars: parsed.totalText.length, images: parsed.images.length, tokens: parsed.estimatedTokens, truncated: parsed.truncated });
-      setSourceText(parsed.totalText);
+      console.log('[upload] Parsed successfully:', { slides: parsed.slides.length, totalImages: parsed.totalImages, totalTokens: parsed.totalTokens });
+      setParsedDeck(parsed);
+      // Auto-select the first slide that has any extractable content.
+      const firstWithContent = parsed.slides.findIndex(s => !!s.text.trim() || s.images.length > 0);
+      setSelectedSlideIndex(firstWithContent >= 0 ? firstWithContent : 0);
       setSourceName(file.name);
-      const parts = [`${parsed.slideCount} slide${parsed.slideCount === 1 ? '' : 's'}`];
-      if (parsed.images.length > 0) parts.push(`${parsed.images.length} image${parsed.images.length === 1 ? '' : 's'}`);
-      parts.push(`~${parsed.estimatedTokens.toLocaleString()} text tokens`);
-      if (parsed.truncated) parts.push('truncated');
+      const parts = [`${parsed.slides.length} slide${parsed.slides.length === 1 ? '' : 's'}`];
+      if (parsed.totalImages > 0) parts.push(`${parsed.totalImages} image${parsed.totalImages === 1 ? '' : 's'}`);
+      parts.push(`~${parsed.totalTokens.toLocaleString()} text tokens`);
       setSourceMeta(parts.join(' · '));
-      runContextSummary(parsed.totalText, parsed.images.map(i => i.dataUrl));
     } catch (err: any) {
       console.error('[upload] Parse failed:', err);
       setSourceError(err?.message || 'Failed to parse the file.');
-      setSourceText('');
+      setParsedDeck(null);
+      setSelectedSlideIndex(0);
       setSourceName('');
       setSourceMeta('');
     } finally {
@@ -425,15 +455,27 @@ export default function App() {
   const handlePastedTextApply = () => {
     if (!pastedText.trim()) return;
     setSourceError('');
-    setSourceText(pastedText.trim());
+    const text = pastedText.trim();
+    const tokens = Math.ceil(text.length / 4);
+    // Wrap pasted text as a one-slide "deck" so downstream code (which selects
+    // a slide) keeps working with no branching.
+    const singleSlide: ParsedSlide = {
+      index: 1,
+      text,
+      notes: '',
+      images: [],
+      thumbnailDataUrl: null,
+      estimatedTokens: tokens,
+    };
+    setParsedDeck({ slides: [singleSlide], totalText: text, totalImages: 0, totalTokens: tokens });
+    setSelectedSlideIndex(0);
     setSourceName('Pasted text');
-    const tokens = Math.ceil(pastedText.length / 4);
     setSourceMeta(`~${tokens.toLocaleString()} tokens`);
-    runContextSummary(pastedText.trim(), []);
   };
 
   const clearSource = () => {
-    setSourceText('');
+    setParsedDeck(null);
+    setSelectedSlideIndex(0);
     setSourceName('');
     setSourceMeta('');
     setSourceError('');
@@ -573,6 +615,15 @@ export default function App() {
     }
   };
 
+  const handleCancel = () => {
+    abortRef.current?.abort();
+    setSlots(prev => prev.map(s =>
+      (s.status === 'rendering' || s.status === 'planning')
+        ? { ...s, status: 'cancelled', error: 'Cancelled by user' }
+        : s
+    ));
+  };
+
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!topic.trim() || isGenerating) return;
@@ -589,6 +640,12 @@ export default function App() {
 
     setError('');
     setSelectedSlotIndex(0);
+
+    // Fresh AbortController for this batch. Old aborted controllers stay
+    // referenced by in-flight calls from the prior run, which will reject
+    // independently — that's fine, those slots are already cancelled.
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
 
     const baseSettings: SlotSettings = { flow, density, iconography, accessibility, orientation };
 
@@ -640,10 +697,15 @@ export default function App() {
         null,
         null,
         sourceText || null,
-        slotSnapshot.overrides
+        slotSnapshot.overrides,
+        undefined,
+        signal
       ).then(url => {
         setSlots(prev => prev.map((s, i) => i === idx ? { ...s, status: 'done', url } : s));
       }).catch(err => {
+        // If the AbortController fired, leave the slot in whatever 'cancelled'
+        // state handleCancel set; don't overwrite to 'error'.
+        if (err?.name === 'AbortError' || signal.aborted) return;
         console.error(`Slot ${idx} (${slotSnapshot.engine}, ${slotSnapshot.variation}) failed:`, err);
         setSlots(prev => prev.map((s, i) => i === idx ? { ...s, status: 'error', error: err?.message || String(err) } : s));
       });
@@ -670,9 +732,15 @@ export default function App() {
           topic,
           base: baseSettings,
           referenceContext: sourceText || undefined,
-        });
+        }, signal);
         console.log(`[plan] returned in ${((Date.now() - t0) / 1000).toFixed(1)}s`, variantPair);
-      } catch (err) {
+      } catch (err: any) {
+        // User-initiated cancel — stop the cascade; planning slots stay
+        // cancelled (handleCancel already flipped them).
+        if (err?.name === 'AbortError' || signal.aborted) {
+          console.log('[plan] aborted by user');
+          return;
+        }
         console.warn('[plan] failed entirely; rendering tuned/reimagined as baseline copies:', err);
         const safeFallback: GptVariantSettings = {
           ...baseSettings,
@@ -858,7 +926,7 @@ export default function App() {
                   <label className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase flex items-center gap-1.5">
                     <FilePpt className="w-3 h-3" /> Reference Material · Optional
                   </label>
-                  {sourceText && (
+                  {parsedDeck && (
                     <button
                       type="button"
                       onClick={clearSource}
@@ -869,7 +937,7 @@ export default function App() {
                   )}
                 </div>
 
-                {!sourceText ? (
+                {!parsedDeck ? (
                   <>
                     <div className="flex gap-1.5">
                       <button
@@ -942,12 +1010,61 @@ export default function App() {
                     )}
                   </>
                 ) : (
-                  <div className="flex items-center gap-2 px-3 py-2.5 border border-emerald-200 bg-emerald-50 rounded-xl">
-                    <FilePpt weight="fill" className="w-4 h-4 text-emerald-700 shrink-0" />
-                    <div className="flex flex-col flex-1 min-w-0">
-                      <span className="text-[12px] font-bold text-zinc-900 truncate">{sourceName}</span>
-                      <span className="text-[10px] text-emerald-700 font-mono">{sourceMeta}</span>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2 px-3 py-2.5 border border-emerald-200 bg-emerald-50 rounded-xl">
+                      <FilePpt weight="fill" className="w-4 h-4 text-emerald-700 shrink-0" />
+                      <div className="flex flex-col flex-1 min-w-0">
+                        <span className="text-[12px] font-bold text-zinc-900 truncate">{sourceName}</span>
+                        <span className="text-[10px] text-emerald-700 font-mono">{sourceMeta}</span>
+                      </div>
                     </div>
+
+                    {/* Slide thumbnail strip — shown only for real decks (skip the
+                        single-slide wrapper around pasted text). */}
+                    {parsedDeck.slides.length > 1 && (
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-[9px] font-bold tracking-widest text-zinc-400 uppercase">Pick the slide to use as context</span>
+                        <div className="flex gap-1.5 overflow-x-auto pb-2 -mx-1 px-1">
+                          {parsedDeck.slides.map((slide, idx) => {
+                            const isSelected = idx === selectedSlideIndex;
+                            return (
+                              <button
+                                key={slide.index}
+                                type="button"
+                                onClick={() => setSelectedSlideIndex(idx)}
+                                title={slide.text ? slide.text.slice(0, 140) : `Slide ${slide.index} (no text extracted)`}
+                                className={`relative shrink-0 w-[88px] h-[64px] rounded-md overflow-hidden border-2 transition-all ${isSelected ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-zinc-200 hover:border-zinc-400'}`}
+                              >
+                                {slide.thumbnailDataUrl ? (
+                                  <img src={slide.thumbnailDataUrl} alt={`Slide ${slide.index}`} className="w-full h-full object-cover" loading="lazy" />
+                                ) : (
+                                  <div className="w-full h-full bg-zinc-50 flex items-center justify-center p-1.5">
+                                    <span className="text-[8px] font-mono text-zinc-500 leading-tight text-center line-clamp-4">
+                                      {slide.text.slice(0, 60) || `Slide ${slide.index}`}
+                                    </span>
+                                  </div>
+                                )}
+                                <span className="absolute top-0.5 left-0.5 bg-zinc-950/85 text-white text-[9px] font-bold tracking-wider px-1 rounded">{slide.index}</span>
+                                {!slide.text.trim() && slide.images.length === 0 && (
+                                  <span className="absolute bottom-0.5 right-0.5 bg-zinc-300/90 text-zinc-700 text-[7px] font-bold uppercase tracking-widest px-1 rounded">empty</span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {selectedSlide && (
+                          <div className="px-3 py-2 bg-white border border-zinc-200 rounded-lg">
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <span className="text-[10px] font-bold tracking-widest text-emerald-700 uppercase">Slide {selectedSlide.index} selected</span>
+                              <span className="text-[9px] font-mono text-zinc-400">{selectedSlide.images.length} image{selectedSlide.images.length === 1 ? '' : 's'} · ~{selectedSlide.estimatedTokens.toLocaleString()} tokens</span>
+                            </div>
+                            <p className="text-[11px] text-zinc-700 line-clamp-2 leading-snug">
+                              {selectedSlide.text || <span className="italic text-zinc-400">No text on this slide — vision will analyze the image only.</span>}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1444,26 +1561,38 @@ export default function App() {
               </div>
             )}
 
-            <button
-              type="submit"
-              disabled={isGenerating || !topic.trim() || enginesSelected.length === 0 || variationsSelected.length === 0}
-              className="group w-full py-4 px-4 bg-zinc-950 text-white font-medium text-[15px] flex items-center justify-center gap-2 rounded-xl transition-all hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg hover:-translate-y-[1px] focus:outline-none active:scale-[0.98] active:translate-y-[1px] shadow-md"
-            >
-              {isGenerating ? (
-                <>
-                  <CircleNotch weight="bold" className="animate-spin w-5 h-5" />
-                  <span>
-                    Rendering {doneCount}/{slots.length}
-                    {isPlanningAny ? ' · GPT-5 still planning' : '...'}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span>Render {enginesSelected.length * variationsSelected.length || 0} Variant{(enginesSelected.length * variationsSelected.length) === 1 ? '' : 's'}</span>
-                  <PaperPlaneTilt weight="fill" className="w-[18px] h-[18px] group-hover:translate-x-1 transition-transform" />
-                </>
+            <div className="flex items-center gap-2">
+              <button
+                type="submit"
+                disabled={isGenerating || !topic.trim() || enginesSelected.length === 0 || variationsSelected.length === 0}
+                className="group flex-1 py-4 px-4 bg-zinc-950 text-white font-medium text-[15px] flex items-center justify-center gap-2 rounded-xl transition-all hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg hover:-translate-y-[1px] focus:outline-none active:scale-[0.98] active:translate-y-[1px] shadow-md"
+              >
+                {isGenerating ? (
+                  <>
+                    <CircleNotch weight="bold" className="animate-spin w-5 h-5" />
+                    <span>
+                      Rendering {doneCount}/{slots.length}
+                      {isPlanningAny ? ' · GPT-5 still planning' : '...'}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span>Render {enginesSelected.length * variationsSelected.length || 0} Variant{(enginesSelected.length * variationsSelected.length) === 1 ? '' : 's'}</span>
+                    <PaperPlaneTilt weight="fill" className="w-[18px] h-[18px] group-hover:translate-x-1 transition-transform" />
+                  </>
+                )}
+              </button>
+              {isGenerating && (
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  className="py-4 px-5 bg-white border-2 border-red-300 text-red-700 hover:bg-red-50 font-bold text-[13px] uppercase tracking-wide rounded-xl transition-colors shadow-sm"
+                  title="Cancel waiting on in-flight renders. Already-issued API calls will still complete and bill."
+                >
+                  Cancel
+                </button>
               )}
-            </button>
+            </div>
           </form>
 
         <AnimatePresence mode="wait">
@@ -1515,6 +1644,14 @@ export default function App() {
                     <WarningCircle className="w-12 h-12" />
                     <p className="font-bold text-sm uppercase tracking-wide">Variant failed</p>
                     <p className="text-[11px] font-mono opacity-70 max-w-md text-center break-words">{selectedSlot.error}</p>
+                  </div>
+                ) : selectedSlot?.status === 'cancelled' ? (
+                  <div className="w-full aspect-[11/8.5] flex flex-col items-center justify-center p-8 bg-zinc-50 text-zinc-600 gap-3">
+                    <span className="text-[28px] leading-none">⏸</span>
+                    <p className="font-bold text-sm uppercase tracking-wide">Cancelled</p>
+                    <p className="text-[11px] text-zinc-500 italic max-w-md text-center">
+                      Hit Render again to re-run. Already-issued API calls finished in the background and were billed.
+                    </p>
                   </div>
                 ) : selectedSlot?.status === 'planning' ? (
                   <div className="w-full aspect-[11/8.5] flex flex-col items-center justify-center p-8 bg-zinc-50 gap-4">
@@ -1625,6 +1762,10 @@ export default function App() {
                     ) : slot.status === 'error' ? (
                       <div className="w-full h-full bg-red-50 flex items-center justify-center">
                         <WarningCircle className="w-6 h-6 text-red-500" />
+                      </div>
+                    ) : slot.status === 'cancelled' ? (
+                      <div className="w-full h-full bg-zinc-100 flex items-center justify-center text-zinc-400">
+                        <span className="text-lg">⏸</span>
                       </div>
                     ) : slot.status === 'planning' ? (
                       <div className="w-full h-full bg-zinc-100 flex flex-col items-center justify-center relative overflow-hidden gap-1">

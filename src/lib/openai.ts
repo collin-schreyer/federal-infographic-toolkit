@@ -27,6 +27,7 @@ export const generateInfographicImage = async (
   contextText: string | null = null,
   overrides?: VariantOverrides,
   meta?: { variation?: 'baseline' | 'tuned' | 'reimagined'; visualRhetoric?: string; sourceName?: string },
+  signal?: AbortSignal,
 ): Promise<string> => {
   const { dataUrl } = await api.post<RenderResponse>('/api/render', {
     engine: 'openai',
@@ -47,6 +48,6 @@ export const generateInfographicImage = async (
     variation: meta?.variation,
     visualRhetoric: meta?.visualRhetoric,
     sourceName: meta?.sourceName,
-  });
+  }, signal);
   return dataUrl;
 };

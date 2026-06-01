@@ -63,12 +63,12 @@ export interface VariantSettingsInput {
   referenceContext?: string;
 }
 
-export async function getVariantSettings(input: VariantSettingsInput): Promise<{ tuned: VariantSettings; reimagined: VariantSettings }> {
+export async function getVariantSettings(input: VariantSettingsInput, signal?: AbortSignal): Promise<{ tuned: VariantSettings; reimagined: VariantSettings }> {
   const { pair } = await api.post<{ pair: { tuned: VariantSettings; reimagined: VariantSettings } }>('/api/plan', {
     topic: input.topic,
     base: input.base,
     referenceContext: input.referenceContext,
-  });
+  }, signal);
   return pair;
 }
 

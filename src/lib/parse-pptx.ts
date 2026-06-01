@@ -6,25 +6,29 @@ export interface ParsedImage {
   name: string;
 }
 
-export interface ParsedDeck {
-  slideCount: number;
-  totalText: string;
-  estimatedTokens: number;
-  truncated: boolean;
-  images: ParsedImage[];
+export interface ParsedSlide {
+  index: number;            // 1-based slide number as it appears in PowerPoint
+  text: string;             // body text extracted from <a:t> nodes
+  notes: string;            // speaker notes if present
+  images: ParsedImage[];    // images that appear on THIS slide, sorted largest-first
+  thumbnailDataUrl: string | null; // largest image on the slide, or null if none
+  estimatedTokens: number;  // rough token count of text + notes (chars / 4)
 }
 
-// Embedded-image extraction limits.
-// - Skip files smaller than this (icons, bullets, decorative logos repeated on every slide).
-const MIN_IMAGE_BYTES = 6_000;
-// - Cap the number we send to GPT-5 vision. Each image at detail=low costs ~85 input
-//   tokens, so 10 images is ~850 tokens — cheap. More than that adds latency without
-//   much marginal info.
-const MAX_IMAGES = 10;
+export interface ParsedDeck {
+  slides: ParsedSlide[];
+  totalText: string;        // concatenation of all slide texts (kept for fallback "use whole deck" callers)
+  totalImages: number;      // total images across all slides
+  totalTokens: number;
+}
 
-// Map file extensions to MIME types OpenAI Vision accepts. JSZip's async('blob')
-// returns blobs with an empty `type`, which makes FileReader.readAsDataURL emit
-// `application/octet-stream` — and OpenAI rejects anything that isn't a real image MIME.
+// Single deck-wide cap; per-slide content is already small.
+const MAX_TOTAL_CHARS = 200_000;
+// Skip files smaller than this (icons, bullets, decorative chrome).
+const MIN_IMAGE_BYTES = 6_000;
+// Per-slide image cap to keep state size reasonable.
+const MAX_IMAGES_PER_SLIDE = 8;
+
 const VISION_MIME_BY_EXT: Record<string, string> = {
   png: 'image/png',
   jpg: 'image/jpeg',
@@ -34,7 +38,6 @@ const VISION_MIME_BY_EXT: Record<string, string> = {
 };
 
 const bytesToBase64 = (bytes: Uint8Array): string => {
-  // Chunked to avoid blowing the call stack on large images.
   const CHUNK = 0x8000;
   let binary = '';
   for (let i = 0; i < bytes.length; i += CHUNK) {
@@ -42,9 +45,6 @@ const bytesToBase64 = (bytes: Uint8Array): string => {
   }
   return btoa(binary);
 };
-
-// Generous cap — GPT-5 has 400K context and we cache, so we can afford a lot.
-const MAX_CHARS = 80_000;
 
 const decodeXmlEntities = (s: string): string =>
   s
@@ -64,9 +64,6 @@ const extractSlideText = (xml: string): string => {
     .trim();
 };
 
-// Also scan slide notes (speaker notes contain a lot of useful context).
-const noteText = (xml: string): string => extractSlideText(xml);
-
 export async function parsePptx(file: File): Promise<ParsedDeck> {
   let zip: JSZip;
   try {
@@ -83,104 +80,108 @@ export async function parsePptx(file: File): Promise<ParsedDeck> {
       return aNum - bNum;
     });
 
-  console.log(`[parse-pptx] Found ${slideFiles.length} slide files`, slideFiles.slice(0, 3));
+  console.log(`[parse-pptx] Found ${slideFiles.length} slide files`);
 
   if (slideFiles.length === 0) {
     throw new Error('No slides found. Is this a valid .pptx file? (Try Save As → PowerPoint .pptx if it came from another tool.)');
   }
 
-  const slides: string[] = [];
-  for (const fileName of slideFiles) {
-    const xml = await zip.files[fileName].async('string');
-    const text = extractSlideText(xml);
-    const idx = parseInt(fileName.match(/slide(\d+)\.xml/)?.[1] || '0', 10);
+  // Pre-load all media files once and cache by media filename. We'll match
+  // against this from each slide's .rels later.
+  const mediaCache = new Map<string, ParsedImage>(); // key = filename in ppt/media/
+  for (const mediaPath of Object.keys(zip.files)) {
+    if (!/^ppt\/media\/.+\.(png|jpe?g|gif|webp)$/i.test(mediaPath)) continue;
+    const mediaName = mediaPath.replace('ppt/media/', '');
+    const ext = mediaName.match(/\.([a-z0-9]+)$/i)?.[1].toLowerCase() || '';
+    const mime = VISION_MIME_BY_EXT[ext];
+    if (!mime) continue;
+    try {
+      const bytes = await zip.files[mediaPath].async('uint8array');
+      if (bytes.length < MIN_IMAGE_BYTES) continue;
+      mediaCache.set(mediaName, {
+        dataUrl: `data:${mime};base64,${bytesToBase64(bytes)}`,
+        sizeBytes: bytes.length,
+        name: mediaName,
+      });
+    } catch (e) {
+      console.warn(`[parse-pptx] failed to read ${mediaPath}:`, e);
+    }
+  }
 
-    // Also grab speaker notes if present
+  const slides: ParsedSlide[] = [];
+
+  for (const slideFile of slideFiles) {
+    const idx = parseInt(slideFile.match(/slide(\d+)\.xml/)?.[1] || '0', 10);
+    const slideXml = await zip.files[slideFile].async('string');
+    const text = extractSlideText(slideXml);
+
+    // Speaker notes if present
     const notesFile = `ppt/notesSlides/notesSlide${idx}.xml`;
     let notes = '';
     if (zip.files[notesFile]) {
       const notesXml = await zip.files[notesFile].async('string');
-      notes = noteText(notesXml);
+      notes = extractSlideText(notesXml);
     }
 
-    const combined = [text, notes && `(notes: ${notes})`].filter(Boolean).join(' ').trim();
-    if (combined) {
-      slides.push(`Slide ${idx}: ${combined}`);
+    // Resolve images on THIS slide via its .rels file. The rels file maps
+    // relationship IDs (rIdN) to a Target path like "../media/imageK.png".
+    // We extract every media reference; that's the set of images present on
+    // this specific slide.
+    const relsFile = `ppt/slides/_rels/slide${idx}.xml.rels`;
+    const slideImageNames = new Set<string>();
+    if (zip.files[relsFile]) {
+      const relsXml = await zip.files[relsFile].async('string');
+      const matches = relsXml.matchAll(/Target="\.\.\/media\/([^"]+)"/g);
+      for (const m of matches) slideImageNames.add(m[1]);
     }
+
+    const slideImages: ParsedImage[] = [];
+    for (const name of slideImageNames) {
+      const cached = mediaCache.get(name);
+      if (cached) slideImages.push(cached);
+    }
+    slideImages.sort((a, b) => b.sizeBytes - a.sizeBytes);
+    const cappedImages = slideImages.slice(0, MAX_IMAGES_PER_SLIDE);
+    const thumbnailDataUrl = cappedImages[0]?.dataUrl ?? null;
+
+    const slideTokens = Math.ceil((text.length + notes.length) / 4);
+    slides.push({
+      index: idx,
+      text,
+      notes,
+      images: cappedImages,
+      thumbnailDataUrl,
+      estimatedTokens: slideTokens,
+    });
   }
 
-  console.log(`[parse-pptx] Extracted text from ${slides.length}/${slideFiles.length} slides`);
+  // Stitch together the deck-wide text fallback (used when no specific slide
+  // is selected, or as a metadata measure).
+  let totalText = slides
+    .map(s => {
+      const body = s.text.trim();
+      const notes = s.notes.trim();
+      if (!body && !notes) return '';
+      const parts: string[] = [`Slide ${s.index}: ${body}`];
+      if (notes) parts.push(`(notes: ${notes})`);
+      return parts.join(' ');
+    })
+    .filter(Boolean)
+    .join('\n\n');
 
-  let totalText = slides.join('\n\n');
-
-  // Fallback: if slides yielded nothing, scan slide layouts. Some decks put
-  // all their content in layouts and use empty slides on top.
-  if (!totalText.trim()) {
-    console.warn('[parse-pptx] No text in slides — scanning slideLayouts as fallback');
-    const layoutFiles = Object.keys(zip.files).filter(n => /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(n));
-    const layoutTexts: string[] = [];
-    for (const f of layoutFiles) {
-      const xml = await zip.files[f].async('string');
-      const t = extractSlideText(xml);
-      if (t) layoutTexts.push(t);
-    }
-    totalText = layoutTexts.join('\n\n');
+  if (totalText.length > MAX_TOTAL_CHARS) {
+    totalText = totalText.slice(0, MAX_TOTAL_CHARS) + '\n\n[... truncated for prompt budget ...]';
   }
 
-  // Extract embedded images (architecture diagrams, screenshots, current-state
-  // drawings, etc.) so GPT-5 vision can analyze the actual visuals on the slides.
-  // PPTX dedups images at the file level: a logo repeated on every slide is one
-  // file in ppt/media/, so unique-file iteration handles dedup for free.
-  const imageFileNames = Object.keys(zip.files)
-    .filter(name => /^ppt\/media\/.+\.(png|jpe?g|gif|webp)$/i.test(name));
+  const totalImages = slides.reduce((sum, s) => sum + s.images.length, 0);
+  const totalTokens = Math.ceil(totalText.length / 4);
 
-  console.log(`[parse-pptx] Found ${imageFileNames.length} embedded image file(s)`);
-
-  const allImages: ParsedImage[] = [];
-  for (const fileName of imageFileNames) {
-    try {
-      const ext = fileName.match(/\.([a-z0-9]+)$/i)?.[1].toLowerCase() || '';
-      const mime = VISION_MIME_BY_EXT[ext];
-      if (!mime) continue;
-      const bytes = await zip.files[fileName].async('uint8array');
-      if (bytes.length < MIN_IMAGE_BYTES) continue;
-      const dataUrl = `data:${mime};base64,${bytesToBase64(bytes)}`;
-      allImages.push({
-        dataUrl,
-        sizeBytes: bytes.length,
-        name: fileName.replace('ppt/media/', ''),
-      });
-    } catch (e) {
-      console.warn(`[parse-pptx] Skipping ${fileName}:`, e);
-    }
-  }
-
-  // Bigger files are usually the substantive diagrams / screenshots, not chrome.
-  allImages.sort((a, b) => b.sizeBytes - a.sizeBytes);
-  const images = allImages.slice(0, MAX_IMAGES);
-  console.log(`[parse-pptx] Selected ${images.length} image(s) for vision analysis`);
-
-  // If we have zero text AND zero usable images, the deck is unusable.
-  if (!totalText.trim() && images.length === 0) {
+  // If we have zero usable content anywhere, treat as a hard error.
+  if (!totalText.trim() && totalImages === 0) {
     throw new Error(`Found ${slideFiles.length} slide${slideFiles.length === 1 ? '' : 's'} but could not extract any text or substantive images. Try the "Paste Text" tab instead.`);
   }
 
-  // Allow text-empty case if we have images — GPT-5 vision will read them.
-  if (!totalText.trim()) {
-    totalText = `(No extractable text. ${images.length} image${images.length === 1 ? '' : 's'} attached for visual analysis.)`;
-  }
+  console.log(`[parse-pptx] Parsed ${slides.length} slide(s) · ${totalImages} image(s) total · ${totalTokens} tokens`);
 
-  let truncated = false;
-  if (totalText.length > MAX_CHARS) {
-    totalText = totalText.slice(0, MAX_CHARS) + '\n\n[... truncated for prompt budget ...]';
-    truncated = true;
-  }
-
-  return {
-    slideCount: slideFiles.length,
-    totalText,
-    estimatedTokens: Math.ceil(totalText.length / 4),
-    truncated,
-    images,
-  };
+  return { slides, totalText, totalImages, totalTokens };
 }
