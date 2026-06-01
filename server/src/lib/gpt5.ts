@@ -312,7 +312,10 @@ export async function getVariantSettings(input: VariantSettingsInput): Promise<V
         type: 'json_schema',
         json_schema: { name: 'variant_settings_pair', strict: true, schema: VARIANT_SETTINGS_SCHEMA },
       },
-      reasoning_effort: 'high',
+      // 'high' was burning 90-120s per plan call. 'medium' is roughly 3x
+      // faster (~30-60s) while still producing strong reinterpretations.
+      // Bump back to 'high' if Reimagined starts feeling tame.
+      reasoning_effort: 'medium',
     });
     console.log(`[variant-settings] returned in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     const parsed = JSON.parse(raw) as VariantSettingsPair;
