@@ -40,6 +40,13 @@ async function apiFetch<T>(
     const msg = (data && data.error) || `Request failed: ${res.status}`;
     throw new ApiError(msg, res.status);
   }
+  // Every api.* endpoint returns a JSON object. An empty body or an HTML/text
+  // payload with a 200 status means a proxy hiccup or a machine mid-restart —
+  // surface it as a retryable error instead of returning null and letting
+  // callers crash on destructuring.
+  if (data === null || typeof data !== 'object') {
+    throw new ApiError(`The server returned an unexpected ${res.status} response — please retry.`, res.status);
+  }
   return data as T;
 }
 

@@ -49,12 +49,26 @@ app.route('/api', userRoutes);
 // isn't an /api/* route falls back to index.html for SPA client-side routing.
 const PUBLIC_DIR = process.env.PUBLIC_DIR || './public';
 if (existsSync(PUBLIC_DIR)) {
-  app.use('/*', serveStatic({ root: PUBLIC_DIR }));
+  // Cache policy matters here: Vite asset filenames are content-hashed, so
+  // /assets/* can be cached forever. index.html must NEVER be cached — a
+  // browser holding a stale index.html keeps requesting old (deleted) bundles
+  // after each deploy, which is exactly how users end up on broken builds.
+  app.use('/*', serveStatic({
+    root: PUBLIC_DIR,
+    onFound: (path, c) => {
+      if (path.includes('/assets/')) {
+        c.header('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        c.header('Cache-Control', 'no-cache');
+      }
+    },
+  }));
   const indexHtmlPath = resolve(PUBLIC_DIR, 'index.html');
   if (existsSync(indexHtmlPath)) {
     const indexHtml = readFileSync(indexHtmlPath, 'utf-8');
     app.get('*', (c) => {
       if (c.req.path.startsWith('/api/')) return c.notFound();
+      c.header('Cache-Control', 'no-cache');
       return c.html(indexHtml);
     });
   }

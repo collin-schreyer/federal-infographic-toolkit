@@ -8,9 +8,18 @@ import { summarizeReference, suggestPromptFromImage, getVariantSettings } from '
 import type { VariantSettings as GptVariantSettings } from './lib/gpt5';
 import type { VariantOverrides } from './lib/variant-overrides';
 import { api, type PublicUser } from './lib/api';
-import HistoryView from './HistoryView';
-import AdminView from './AdminView';
-import PreviewInWord from './PreviewInWord';
+
+// Secondary views load on demand — keeps the initial bundle (and first paint)
+// focused on the generator itself.
+const HistoryView = React.lazy(() => import('./HistoryView'));
+const AdminView = React.lazy(() => import('./AdminView'));
+const PreviewInWord = React.lazy(() => import('./PreviewInWord'));
+
+const ViewLoading = () => (
+  <div className="min-h-[100dvh] w-full flex items-center justify-center bg-zinc-50">
+    <CircleNotch weight="bold" className="w-8 h-8 text-zinc-400 animate-spin" />
+  </div>
+);
 import {
   PaperPlaneTilt,
   CircleNotch,
@@ -33,6 +42,7 @@ import {
   Sparkle,
   ArrowDown,
   FileDoc,
+  ArrowsClockwise,
 } from '@phosphor-icons/react';
 
 import Landing from './Landing';
@@ -140,7 +150,7 @@ export default function App() {
   // Restore session on mount, and listen for 401s anywhere to drop back to login.
   useEffect(() => {
     api.get<{ user: PublicUser | null }>('/api/auth/me')
-      .then(({ user }) => setCurrentUser(user))
+      .then((data) => setCurrentUser(data?.user ?? null))
       .catch(() => setCurrentUser(null))
       .finally(() => setAuthChecking(false));
     const onUnauthorized = () => setCurrentUser(null);
@@ -153,11 +163,14 @@ export default function App() {
     setAuthError('');
     setAuthBusy(true);
     try {
-      const { user } = await api.post<{ user: PublicUser }>('/api/auth/login', {
+      const data = await api.post<{ user: PublicUser }>('/api/auth/login', {
         email: emailInput.trim(),
         password: passwordInput,
       });
-      setCurrentUser(user);
+      if (!data?.user) {
+        throw new Error('The server accepted the login but returned no user — please retry.');
+      }
+      setCurrentUser(data.user);
       setEmailInput('');
       setPasswordInput('');
     } catch (err: any) {
@@ -202,8 +215,24 @@ export default function App() {
   // Independent engine + variation multi-selects. Default = 1 GPT + 1 Gemini
   // baseline (2 variants total). Tuned and Reimagined are opt-in checkboxes
   // — the costly GPT-5 plan call only fires when at least one is enabled.
-  const [enginesSelected, setEnginesSelected] = useState<Engine[]>(['openai', 'gemini']);
-  const [variationsSelected, setVariationsSelected] = useState<Variation[]>(['baseline']);
+  // Selections persist across sessions; the Render button always shows the
+  // resulting variant count, so there's no surprise on cost.
+  const [enginesSelected, setEnginesSelected] = useState<Engine[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('fit:engines') || '');
+      if (Array.isArray(saved) && saved.length > 0 && saved.every(v => v === 'openai' || v === 'gemini')) return saved;
+    } catch { /* fall through to default */ }
+    return ['openai', 'gemini'];
+  });
+  const [variationsSelected, setVariationsSelected] = useState<Variation[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('fit:variations') || '');
+      if (Array.isArray(saved) && saved.length > 0 && saved.every(v => ['baseline', 'tuned', 'reimagined'].includes(v))) return saved;
+    } catch { /* fall through to default */ }
+    return ['baseline'];
+  });
+  useEffect(() => { localStorage.setItem('fit:engines', JSON.stringify(enginesSelected)); }, [enginesSelected]);
+  useEffect(() => { localStorage.setItem('fit:variations', JSON.stringify(variationsSelected)); }, [variationsSelected]);
 
   // Inline sizes are small in-document graphics. Standard/Detailed densities
   // are nonsensical at those aspect ratios — they jam tiny illegible text into
@@ -624,6 +653,54 @@ export default function App() {
     ));
   };
 
+  // Re-run a single failed/cancelled slot with its own captured settings —
+  // no need to redo the whole batch (or re-pay the GPT-5 plan call).
+  const retrySlot = (idx: number) => {
+    const slot = slots[idx];
+    if (!slot || (slot.status !== 'error' && slot.status !== 'cancelled')) return;
+
+    if (!abortRef.current || abortRef.current.signal.aborted) {
+      abortRef.current = new AbortController();
+    }
+    const signal = abortRef.current.signal;
+
+    const payloadColors = extractedPalette.length > 0
+      ? [primaryColor, accentColor, ...extractedPalette.filter(c => c !== primaryColor && c !== accentColor)]
+      : [primaryColor, accentColor];
+
+    setSlots(prev => prev.map((s, i) => i === idx ? { ...s, status: 'rendering', error: undefined } : s));
+
+    const generator = slot.engine === 'openai' ? generateOpenAIImage : generateGeminiImage;
+    const effectiveTopic = slot.topicOverride || topic;
+
+    generator(
+      effectiveTopic,
+      '',
+      payloadColors,
+      selectedFont,
+      headerLogo,
+      slot.settings.density,
+      slot.settings.flow,
+      slot.settings.orientation,
+      slot.settings.accessibility,
+      slot.settings.iconography,
+      isTransparent,
+      null,
+      null,
+      sourceText || null,
+      slot.overrides,
+      undefined,
+      signal
+    ).then(url => {
+      if (signal.aborted) return;
+      setSlots(prev => prev.map((s, i) => i === idx ? { ...s, status: 'done', url } : s));
+    }).catch(err => {
+      if (err?.name === 'AbortError' || signal.aborted) return;
+      console.error(`Retry of slot ${idx} failed:`, err);
+      setSlots(prev => prev.map((s, i) => i === idx ? { ...s, status: 'error', error: err?.message || String(err) } : s));
+    });
+  };
+
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!topic.trim() || isGenerating) return;
@@ -857,10 +934,18 @@ export default function App() {
   }
 
   if (view === 'history' && currentUser) {
-    return <HistoryView currentUser={currentUser} onBack={() => setView('generator')} onLogout={handleLogout} />;
+    return (
+      <React.Suspense fallback={<ViewLoading />}>
+        <HistoryView currentUser={currentUser} onBack={() => setView('generator')} onLogout={handleLogout} />
+      </React.Suspense>
+    );
   }
   if (view === 'admin' && currentUser?.role === 'admin') {
-    return <AdminView currentUser={currentUser} onBack={() => setView('generator')} onLogout={handleLogout} />;
+    return (
+      <React.Suspense fallback={<ViewLoading />}>
+        <AdminView currentUser={currentUser} onBack={() => setView('generator')} onLogout={handleLogout} />
+      </React.Suspense>
+    );
   }
 
   return (
@@ -1649,14 +1734,28 @@ export default function App() {
                     <WarningCircle className="w-12 h-12" />
                     <p className="font-bold text-sm uppercase tracking-wide">Variant failed</p>
                     <p className="text-[11px] font-mono opacity-70 max-w-md text-center break-words">{selectedSlot.error}</p>
+                    <button
+                      type="button"
+                      onClick={() => retrySlot(selectedSlotIndex)}
+                      className="mt-1 px-4 py-2 bg-red-700 hover:bg-red-800 text-white text-[11px] font-bold uppercase tracking-wide rounded-lg flex items-center gap-2"
+                    >
+                      <ArrowsClockwise weight="bold" className="w-3.5 h-3.5" /> Retry this variant
+                    </button>
                   </div>
                 ) : selectedSlot?.status === 'cancelled' ? (
                   <div className="w-full aspect-[11/8.5] flex flex-col items-center justify-center p-8 bg-zinc-50 text-zinc-600 gap-3">
                     <span className="text-[28px] leading-none">⏸</span>
                     <p className="font-bold text-sm uppercase tracking-wide">Cancelled</p>
                     <p className="text-[11px] text-zinc-500 italic max-w-md text-center">
-                      Hit Render again to re-run. Already-issued API calls finished in the background and were billed.
+                      Retry just this variant below, or hit Render to re-run the whole batch.
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => retrySlot(selectedSlotIndex)}
+                      className="mt-1 px-4 py-2 bg-zinc-950 hover:bg-zinc-800 text-white text-[11px] font-bold uppercase tracking-wide rounded-lg flex items-center gap-2"
+                    >
+                      <ArrowsClockwise weight="bold" className="w-3.5 h-3.5" /> Retry this variant
+                    </button>
                   </div>
                 ) : selectedSlot?.status === 'planning' ? (
                   <div className="w-full aspect-[11/8.5] flex flex-col items-center justify-center p-8 bg-zinc-50 gap-4">
@@ -1810,12 +1909,16 @@ export default function App() {
         </div>
       </section>
 
-      <PreviewInWord
-        open={previewOpen}
-        imageUrl={selectedSlot?.status === 'done' ? selectedSlot.url || null : null}
-        imageName={selectedSlot ? `Variant ${selectedSlotIndex + 1} · ${engineLabel(selectedSlot.engine)} · ${variationLabel(selectedSlot.variation)}` : undefined}
-        onClose={() => setPreviewOpen(false)}
-      />
+      {previewOpen && (
+        <React.Suspense fallback={null}>
+          <PreviewInWord
+            open={previewOpen}
+            imageUrl={selectedSlot?.status === 'done' ? selectedSlot.url || null : null}
+            imageName={selectedSlot ? `Variant ${selectedSlotIndex + 1} · ${engineLabel(selectedSlot.engine)} · ${variationLabel(selectedSlot.variation)}` : undefined}
+            onClose={() => setPreviewOpen(false)}
+          />
+        </React.Suspense>
+      )}
 
       {/* Example-size preview modal */}
       {exampleModal && (

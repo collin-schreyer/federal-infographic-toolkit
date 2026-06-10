@@ -10,14 +10,19 @@ primary_region = "iad"
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = "off"
   auto_start_machines = true
-  min_machines_running = 0
+  # Keep one machine always on: kills cold-start latency on first render of
+  # the day and eliminates the stop-race window where the proxy could return
+  # an empty response mid-request. ~$8/mo at this size, worth it for a team tool.
+  min_machines_running = 1
   processes = ["app"]
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  # 1GB headroom for concurrent image payloads (each render moves a 1-3MB
+  # base64 image through memory; six at once on 512MB risked OOM kills).
+  memory = "1gb"
 
 [[mounts]]
   source = "data"
