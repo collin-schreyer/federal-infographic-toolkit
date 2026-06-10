@@ -36,6 +36,10 @@ export const backgroundClause = (mode: BackgroundMode | undefined, isTransparent
   return 'Ensure a solid professional light background color.';
 };
 
+// The logo itself is no longer sent to the image models — models redraw
+// reference images, which warps logo detail. Instead the model reserves a
+// clean corner and the server composites the user's actual logo file onto
+// the finished render (see composite.ts). Pixel-perfect by construction.
 export const logoClause = (
   treatment: LogoTreatment | undefined,
   hasLogo: boolean,
@@ -43,7 +47,7 @@ export const logoClause = (
   if (!hasLogo) return '';
   if (treatment === 'omit') return '';
   if (treatment === 'footer-corner') {
-    return `\n\nCRITICAL: One of the attached images is the organization's logo. Place it discreetly in the bottom-right footer corner of the composition. Keep it small and unobtrusive.`;
+    return `\n\nLOGO SPACE: Reserve a clean, completely empty rectangular area in the BOTTOM-RIGHT corner of the composition (roughly 18% of the canvas width and 12% of its height, with a comfortable margin from the edges). Do not place any text, icons, borders, or graphics in that area — the organization's official logo will be placed there after rendering.`;
   }
-  return `\n\nCRITICAL: One of the attached images is the organization's logo. You MUST insert this exact logo prominently into the top left corner of the generated infographic.`;
+  return `\n\nLOGO SPACE: Reserve a clean, completely empty rectangular area in the TOP-LEFT corner of the composition (roughly 18% of the canvas width and 12% of its height, with a comfortable margin from the edges). Do not place any text, icons, borders, or graphics in that area — the organization's official logo will be placed there after rendering.`;
 };

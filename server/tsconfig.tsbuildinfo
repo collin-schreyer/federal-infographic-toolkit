@@ -1,0 +1,1 @@
+{"root":["./src/auth.ts","./src/db.ts","./src/index.ts","./src/lib/composite.ts","./src/lib/gemini.ts","./src/lib/gpt5.ts","./src/lib/openai.ts","./src/lib/variant-overrides.ts","./src/routes/ai.ts","./src/routes/auth.ts","./src/routes/history.ts","./src/routes/render.ts","./src/routes/users.ts"],"errors":true,"version":"5.9.3"}

@@ -630,7 +630,15 @@ export default function App() {
         targetBase64,
         revisionPrompt,
         sourceText || null,
-        slot.overrides
+        slot.overrides,
+        {
+          variation: slot.variation,
+          visualRhetoric: slot.visualRhetoric,
+          sourceName: sourceName || undefined,
+          // No slide reference on revisions — the prior render being revised
+          // already embodies it; attaching both would muddle the edit.
+          referenceImageBase64: null,
+        }
       );
 
       setSlots(prev => prev.map((s, i) => i === selectedSlotIndex ? { ...s, url: newImgUrl, status: 'done', error: undefined } : s));
@@ -689,7 +697,12 @@ export default function App() {
       null,
       sourceText || null,
       slot.overrides,
-      undefined,
+      {
+        variation: slot.variation,
+        visualRhetoric: slot.visualRhetoric,
+        sourceName: sourceName || undefined,
+        referenceImageBase64: selectedSlide?.thumbnailDataUrl ?? null,
+      },
       signal
     ).then(url => {
       if (signal.aborted) return;
@@ -775,7 +788,14 @@ export default function App() {
         null,
         sourceText || null,
         slotSnapshot.overrides,
-        undefined,
+        {
+          variation: slotSnapshot.variation,
+          visualRhetoric: slotSnapshot.visualRhetoric,
+          sourceName: sourceName || undefined,
+          // The selected slide's graphic rides along as the visual starting
+          // point — the engines treat it as the base composition to evolve.
+          referenceImageBase64: selectedSlide?.thumbnailDataUrl ?? null,
+        },
         signal
       ).then(url => {
         // If the user cancelled (or kicked off a brand-new run) while this
@@ -1149,8 +1169,13 @@ export default function App() {
                               <span className="text-[9px] font-mono text-zinc-400">{selectedSlide.images.length} image{selectedSlide.images.length === 1 ? '' : 's'} · ~{selectedSlide.estimatedTokens.toLocaleString()} tokens</span>
                             </div>
                             <p className="text-[11px] text-zinc-700 line-clamp-2 leading-snug">
-                              {selectedSlide.text || <span className="italic text-zinc-400">No text on this slide — vision will analyze the image only.</span>}
+                              {selectedSlide.text || <span className="italic text-zinc-400">No text on this slide — the graphic itself carries the content.</span>}
                             </p>
+                            {selectedSlide.thumbnailDataUrl && (
+                              <p className="text-[10px] text-emerald-700 mt-1 leading-snug">
+                                This slide's graphic will be passed to the image models as the visual starting point — describe your changes in the Proposal Subject and they'll be applied to it.
+                              </p>
+                            )}
                           </div>
                         )}
                       </div>

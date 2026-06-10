@@ -27,6 +27,9 @@ export interface GeminiRenderInput {
   imageToReviseBase64: string | null;
   revisionPrompt: string | null;
   contextText: string | null;
+  // The user-selected slide graphic (from a PPTX upload) used as the visual
+  // starting point for the render.
+  referenceImageBase64?: string | null;
   overrides?: VariantOverrides;
 }
 
@@ -37,7 +40,7 @@ export async function generateInfographicImage(input: GeminiRenderInput): Promis
   const {
     topic, colors, fontFamily, logoUrl, density, flow, orientation,
     accessibility, iconography, isTransparent, imageToReviseBase64,
-    revisionPrompt, contextText, overrides,
+    revisionPrompt, contextText, referenceImageBase64, overrides,
   } = input;
 
   const contextBlock = contextText && contextText.trim()
@@ -95,6 +98,17 @@ ${revisionPrompt && imageToReviseBase64 ? `\nCRITICAL REVISION INSTRUCTION:\nThe
 
 Do NOT generate any text explanation. ONLY output the high-fidelity image composition.`;
 
+  // Slide reference: attach the user's selected slide graphic as the visual
+  // starting point. The logo is NOT attached anymore — it gets composited
+  // server-side after rendering (see composite.ts); the model just reserves
+  // a clean corner via logoClause.
+  if (referenceImageBase64) {
+    prompt += `\n\nREFERENCE GRAPHIC: The attached image is an existing slide graphic the user selected as the visual starting point. Treat it as the base composition — preserve its core structure, content, and intent — and apply the subject instructions above as the changes to make. Re-set it cleanly in the requested style (palette, typography, iconography); evolve it, do not copy it pixel-for-pixel.`;
+  }
+  if (includeLogo && logoUrl) {
+    prompt += logoClause(overrides?.logoTreatment, true);
+  }
+
   const requestParts: any[] = [{ text: prompt }];
 
   if (imageToReviseBase64) {
@@ -104,10 +118,8 @@ Do NOT generate any text explanation. ONLY output the high-fidelity image compos
     requestParts.push({ inlineData: { mimeType, data: base64Data } });
   }
 
-  if (includeLogo && logoUrl) {
-    prompt += logoClause(overrides?.logoTreatment, true);
-    requestParts[0].text = prompt;
-    const [header, base64Data] = logoUrl.split(',');
+  if (referenceImageBase64) {
+    const [header, base64Data] = referenceImageBase64.split(',');
     const mimeMatch = header.match(/:([^;]+);/);
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
     requestParts.push({ inlineData: { mimeType, data: base64Data } });

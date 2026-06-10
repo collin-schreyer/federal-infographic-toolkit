@@ -59,6 +59,9 @@ export interface OpenAIRenderInput {
   imageToReviseBase64: string | null;
   revisionPrompt: string | null;
   contextText: string | null;
+  // The user-selected slide graphic (from a PPTX upload) used as the visual
+  // starting point for the render.
+  referenceImageBase64?: string | null;
   overrides?: VariantOverrides;
 }
 
@@ -69,7 +72,7 @@ export async function generateInfographicImage(input: OpenAIRenderInput): Promis
   const {
     topic, colors, fontFamily, logoUrl, density, flow, orientation,
     accessibility, iconography, isTransparent, imageToReviseBase64,
-    revisionPrompt, contextText, overrides,
+    revisionPrompt, contextText, referenceImageBase64, overrides,
   } = input;
 
   const contextBlock = contextText && contextText.trim()
@@ -124,11 +127,14 @@ ABSOLUTE PROHIBITIONS (never include any of these):
 - Decorative shadows, bevels, or skeuomorphic textures
 ${requirementsBlock}
 ${revisionPrompt && imageToReviseBase64 ? `\nCRITICAL REVISION INSTRUCTION:\nThe user has requested an explicit revision to the attached current rendering. REVISION REQUEST: "${revisionPrompt}". You MUST output a new high-fidelity image that strictly incorporates this revision while perfectly maintaining the previously established structural compliance, typography, and palette restrictions.` : ''}
+${referenceImageBase64 ? `\nREFERENCE GRAPHIC: One of the attached images is an existing slide graphic the user selected as the visual starting point. Treat it as the base composition — preserve its core structure, content, and intent — and apply the subject instructions above as the changes to make. Re-set it cleanly in the requested style (palette, typography, iconography); evolve it, do not copy it pixel-for-pixel.` : ''}
 ${includeLogo ? logoClause(overrides?.logoTreatment, true) : ''}
 Output ONLY the high-fidelity image composition. No surrounding text.`;
 
   const size = orientationToSize(orientation);
-  const hasInputImage = !!(imageToReviseBase64 || (includeLogo && logoUrl));
+  // Logo is intentionally NOT an input image anymore — it gets composited
+  // server-side after rendering (see composite.ts).
+  const hasInputImage = !!(imageToReviseBase64 || referenceImageBase64);
 
   if (hasInputImage) {
     const form = new FormData();
@@ -141,8 +147,8 @@ Output ONLY the high-fidelity image composition. No surrounding text.`;
     if (imageToReviseBase64) {
       form.append('image[]', dataUrlToBlob(imageToReviseBase64), 'prior-render.png');
     }
-    if (includeLogo && logoUrl) {
-      form.append('image[]', dataUrlToBlob(logoUrl), 'logo.png');
+    if (referenceImageBase64) {
+      form.append('image[]', dataUrlToBlob(referenceImageBase64), 'reference-slide.png');
     }
 
     let response: Response;
