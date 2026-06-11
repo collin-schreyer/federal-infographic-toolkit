@@ -7,7 +7,7 @@ import type { ParsedDeck, ParsedSlide } from './lib/parse-pptx';
 import { summarizeReference, suggestPromptFromImage, getVariantSettings } from './lib/gpt5';
 import type { VariantSettings as GptVariantSettings } from './lib/gpt5';
 import type { VariantOverrides } from './lib/variant-overrides';
-import { api, type PublicUser, type Project } from './lib/api';
+import { api, type PublicUser, type Project, type RenderHistoryItem } from './lib/api';
 
 // Secondary views load on demand — keeps the initial bundle (and first paint)
 // focused on the generator itself.
@@ -205,6 +205,34 @@ export default function App() {
       setSelectedProjectId(project.id);
     } catch (err: any) {
       setError(err?.message || 'Failed to create project.');
+    }
+  };
+
+  // From History: pull a saved render's image, preload it as the
+  // image-to-revise, restore its project, and land back on the generator so
+  // the user just types what they want changed.
+  const handleMakeRevision = async (item: RenderHistoryItem) => {
+    try {
+      const res = await fetch(item.image_url, { credentials: 'include' });
+      if (!res.ok) throw new Error(`Could not load the image (${res.status}).`);
+      const blob = await res.blob();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error('Failed to read image.'));
+        reader.readAsDataURL(blob);
+      });
+      setReviseImage({
+        dataUrl,
+        name: `From History · ${item.topic.slice(0, 48)}${item.topic.length > 48 ? '…' : ''}`,
+      });
+      if (item.project_id) setSelectedProjectId(item.project_id);
+      setTopic('');
+      setView('generator');
+      window.scrollTo({ top: 0 });
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load that render for revision.');
+      setView('generator');
     }
   };
 
@@ -1082,7 +1110,7 @@ export default function App() {
   if (view === 'history' && currentUser) {
     return (
       <React.Suspense fallback={<ViewLoading />}>
-        <HistoryView currentUser={currentUser} onBack={() => setView('generator')} onLogout={handleLogout} />
+        <HistoryView currentUser={currentUser} onBack={() => setView('generator')} onLogout={handleLogout} onMakeRevision={handleMakeRevision} />
       </React.Suspense>
     );
   }

@@ -7,6 +7,9 @@ interface Props {
   currentUser: PublicUser;
   onBack: () => void;
   onLogout: () => void;
+  // Loads this render into the generator as the image-to-revise and
+  // navigates back so the user can describe their changes.
+  onMakeRevision: (item: RenderHistoryItem) => void;
 }
 
 const variationBadge = (v: 'baseline' | 'tuned' | 'reimagined') =>
@@ -16,7 +19,7 @@ const variationBadge = (v: 'baseline' | 'tuned' | 'reimagined') =>
 const engineBadge = (e: 'openai' | 'gemini') =>
   e === 'openai' ? 'bg-emerald-500 text-white' : 'bg-blue-500 text-white';
 
-const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
+const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout, onMakeRevision }) => {
   const [items, setItems] = useState<RenderHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -126,11 +129,26 @@ const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
                 initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
                 className="bg-white border border-zinc-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow group"
               >
-                <button onClick={() => setSelected(item)} className="w-full aspect-[4/3] bg-zinc-100 overflow-hidden relative">
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelected(item)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') setSelected(item); }}
+                  className="w-full aspect-[4/3] bg-zinc-100 overflow-hidden relative cursor-pointer"
+                >
                   <img src={item.image_url} alt={item.topic} loading="lazy" className="w-full h-full object-cover" />
                   <div className={`absolute top-2 left-2 text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${variationBadge(item.variation)}`}>{item.variation}</div>
-                  <div className={`absolute bottom-2 right-2 text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${engineBadge(item.engine)}`}>{item.engine === 'openai' ? 'GPT' : 'GEM'}</div>
-                </button>
+                  <div className={`absolute top-2 right-2 text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${engineBadge(item.engine)}`}>{item.engine === 'openai' ? 'GPT' : 'GEM'}</div>
+                  {/* Hover CTA: jump back to the generator with this image preloaded */}
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onMakeRevision(item); }}
+                    className="absolute inset-x-2 bottom-2 opacity-0 group-hover:opacity-100 transition-opacity bg-amber-400 hover:bg-amber-300 text-zinc-950 text-[11px] font-bold uppercase tracking-wide py-2 rounded-md shadow-lg"
+                    title="Load this image into the generator and describe your changes"
+                  >
+                    ✎ Make Revision
+                  </button>
+                </div>
                 <div className="p-3 flex flex-col gap-2">
                   <p className="text-[11px] text-zinc-900 font-medium line-clamp-2 leading-snug" title={item.topic}>{item.topic}</p>
                   <div className="flex items-center justify-between gap-2">
@@ -163,6 +181,7 @@ const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
                 <span className="text-[10px] font-mono text-zinc-500">{selected.variation} · {selected.engine} {selected.visual_rhetoric ? `· ${selected.visual_rhetoric}` : ''} · {new Date(selected.created_at).toLocaleString()}</span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                <button onClick={() => onMakeRevision(selected)} className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-zinc-950 text-[11px] font-bold uppercase tracking-wide rounded">✎ Make Revision</button>
                 <button onClick={() => handleDownload(selected)} className="px-3 py-1.5 bg-zinc-950 hover:bg-zinc-800 text-white text-[11px] font-bold uppercase tracking-wide rounded">Download PNG</button>
                 <button onClick={() => handleDelete(selected.id)} className="px-3 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 text-[11px] font-bold uppercase tracking-wide rounded">Delete</button>
                 <button onClick={() => setSelected(null)} className="px-3 py-1.5 border border-zinc-200 text-zinc-700 hover:bg-zinc-50 text-[11px] font-bold uppercase tracking-wide rounded">Close</button>
