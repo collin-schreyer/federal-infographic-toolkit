@@ -57,7 +57,27 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_renders_user_created ON renders(user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, created_at DESC);
 `);
+
+// Idempotent migration: tag renders with an optional project. SQLite's
+// ALTER TABLE ADD COLUMN can't be IF NOT EXISTS, so guard via PRAGMA.
+{
+  const renderCols = db.prepare(`PRAGMA table_info(renders)`).all() as Array<{ name: string }>;
+  if (!renderCols.some(c => c.name === 'project_id')) {
+    db.exec(`ALTER TABLE renders ADD COLUMN project_id TEXT`);
+    console.log('[migrate] added renders.project_id');
+  }
+}
 
 export type DbUser = {
   id: string;

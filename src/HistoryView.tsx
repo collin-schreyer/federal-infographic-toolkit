@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { CircleNotch, Trash, CaretLeft, DownloadSimple, WarningCircle } from '@phosphor-icons/react';
-import { api, type PublicUser, type RenderHistoryItem } from './lib/api';
+import { api, type PublicUser, type RenderHistoryItem, type Project } from './lib/api';
 
 interface Props {
   currentUser: PublicUser;
@@ -21,12 +21,15 @@ const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<RenderHistoryItem | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectFilter, setProjectFilter] = useState<string>(''); // '' = all, 'none' = unfiled, else project id
 
-  const refresh = async () => {
+  const refresh = async (filter = projectFilter) => {
     setLoading(true);
     setError('');
     try {
-      const data = await api.get<{ renders: RenderHistoryItem[]; total: number }>('/api/renders?limit=100');
+      const qs = filter ? `&project=${encodeURIComponent(filter)}` : '';
+      const data = await api.get<{ renders: RenderHistoryItem[]; total: number }>(`/api/renders?limit=100${qs}`);
       setItems(data.renders);
     } catch (err: any) {
       setError(err?.message || 'Failed to load history.');
@@ -35,7 +38,15 @@ const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
     }
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    refresh();
+    api.get<{ projects: Project[] }>('/api/projects')
+      .then(d => setProjects(d.projects))
+      .catch(() => { /* filter just won't show project names */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const projectName = (id: string | null) => id ? (projects.find(p => p.id === id)?.name ?? 'Unknown project') : null;
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this render permanently?')) return;
@@ -77,6 +88,22 @@ const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
       </header>
 
       <main className="px-6 md:px-10 py-8 max-w-7xl mx-auto">
+        {/* Project filter */}
+        <div className="flex items-center gap-2 mb-6">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Project</label>
+          <select
+            value={projectFilter}
+            onChange={(e) => { setProjectFilter(e.target.value); refresh(e.target.value); }}
+            className="bg-white border border-zinc-200 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
+          >
+            <option value="">All renders</option>
+            <option value="none">Unfiled (no project)</option>
+            {projects.map(p => (
+              <option key={p.id} value={p.id}>{p.name} ({p.render_count})</option>
+            ))}
+          </select>
+        </div>
+
         {loading ? (
           <div className="flex items-center justify-center py-24">
             <CircleNotch weight="bold" className="w-8 h-8 text-zinc-400 animate-spin" />
@@ -107,7 +134,9 @@ const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
                 <div className="p-3 flex flex-col gap-2">
                   <p className="text-[11px] text-zinc-900 font-medium line-clamp-2 leading-snug" title={item.topic}>{item.topic}</p>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[9px] font-mono text-zinc-400">{new Date(item.created_at).toLocaleDateString()} · {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    <span className="text-[9px] font-mono text-zinc-400 truncate">
+                      {projectName(item.project_id) ? `${projectName(item.project_id)} · ` : ''}{new Date(item.created_at).toLocaleDateString()} · {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
                     <div className="flex items-center gap-1">
                       <button onClick={() => handleDownload(item)} className="text-zinc-400 hover:text-zinc-900 p-1 rounded hover:bg-zinc-100 transition-colors" title="Download PNG">
                         <DownloadSimple className="w-3.5 h-3.5" />

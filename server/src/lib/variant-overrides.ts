@@ -16,11 +16,16 @@ export interface VariantOverrides {
   loose?: boolean;
 }
 
+// Legacy tokens ('font-serif', or the GPT-5 plan's 'serif'/'sans'/'mono')
+// map to canonical families; anything else is a full font description from
+// the expanded typography picker (e.g. "Calibri · 11pt body text, 14–16pt
+// headers") and passes straight through to the prompt.
 export const fontDescriptor = (token: string): string => {
   const t = token.replace(/^font-/, '');
   if (t === 'serif') return 'Times New Roman (11pt/12pt)';
   if (t === 'sans') return 'Arial (10pt/11pt)';
-  return 'Courier New (10pt)';
+  if (t === 'mono') return 'Courier New (10pt)';
+  return token;
 };
 
 export const backgroundClause = (mode: BackgroundMode | undefined, isTransparent: boolean): string => {

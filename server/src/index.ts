@@ -10,6 +10,7 @@ import renderRoutes from './routes/render.js';
 import aiRoutes from './routes/ai.js';
 import historyRoutes from './routes/history.js';
 import userRoutes from './routes/users.js';
+import projectRoutes from './routes/projects.js';
 import { readFileSync } from 'fs';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
@@ -43,6 +44,7 @@ app.route('/api', renderRoutes);
 app.route('/api', aiRoutes);
 app.route('/api', historyRoutes);
 app.route('/api', userRoutes);
+app.route('/api', projectRoutes);
 
 // In production we bundle the built SPA into ./public and serve it from this
 // same process. The static middleware handles /assets/*; everything else that

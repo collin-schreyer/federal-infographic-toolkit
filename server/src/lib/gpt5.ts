@@ -119,7 +119,17 @@ export interface VariantSettingsPair {
   reimagined: VariantSettings;
 }
 
-const FLOW_VALUES = ['Linear Phase Model', 'Hierarchical Network', 'Abstract Quadrant Matrix'];
+const FLOW_VALUES = [
+  'Linear Phase Model',
+  'Hierarchical Network',
+  'Abstract Quadrant Matrix',
+  'Swimlane Process Lanes',
+  'Milestone Timeline',
+  'Hub-and-Spoke Model',
+  'Current-to-Future State Split',
+  'Continuous Cycle Loop',
+  'Stacked Capability Blocks',
+];
 const DENSITY_VALUES = ['minimal', 'standard', 'detailed'];
 const ICONOGRAPHY_VALUES = ['USWDS Standard Icons', 'Wireframe Lineart Elements', 'Solid Monochrome'];
 const ACCESSIBILITY_VALUES = ['High Contrast Legibility Mode', 'Flat USWDS CSS Variables'];

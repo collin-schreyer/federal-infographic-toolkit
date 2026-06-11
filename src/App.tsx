@@ -7,7 +7,7 @@ import type { ParsedDeck, ParsedSlide } from './lib/parse-pptx';
 import { summarizeReference, suggestPromptFromImage, getVariantSettings } from './lib/gpt5';
 import type { VariantSettings as GptVariantSettings } from './lib/gpt5';
 import type { VariantOverrides } from './lib/variant-overrides';
-import { api, type PublicUser } from './lib/api';
+import { api, type PublicUser, type Project } from './lib/api';
 
 // Secondary views load on demand — keeps the initial bundle (and first paint)
 // focused on the generator itself.
@@ -188,6 +188,42 @@ export default function App() {
 
   const isAuthenticated = !!currentUser;
 
+  // Load the user's projects once signed in.
+  useEffect(() => {
+    if (!currentUser) { setProjects([]); setSelectedProjectId(null); return; }
+    api.get<{ projects: Project[] }>('/api/projects')
+      .then(d => setProjects(d.projects))
+      .catch(err => console.warn('[projects] load failed:', err));
+  }, [currentUser]);
+
+  const handleCreateProject = async () => {
+    const name = window.prompt('Project name (e.g. the solicitation number or pursuit name):')?.trim();
+    if (!name) return;
+    try {
+      const { project } = await api.post<{ project: Project }>('/api/projects', { name });
+      setProjects(prev => [project, ...prev]);
+      setSelectedProjectId(project.id);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to create project.');
+    }
+  };
+
+  // Reset the whole workspace back to a blank slate (renders already saved
+  // to History are untouched).
+  const handleClearEverything = () => {
+    if (!window.confirm('Clear everything? This resets the prompt, results, uploads, and reference material. Images already saved to History are kept.')) return;
+    abortRef.current?.abort();
+    setTopic('');
+    setSlots([]);
+    setSelectedSlotIndex(0);
+    setError('');
+    setIsRevising(false);
+    setRevisionPrompt('');
+    clearSource();
+    clearStyleRef();
+    setReviseImage(null);
+  };
+
   const [topic, setTopic] = useState('');
   const [slots, setSlots] = useState<VariantSlot[]>([]);
   // AbortController for the in-flight render batch. Allocated at the start of
@@ -203,7 +239,8 @@ export default function App() {
   // Customization state
   const [primaryColor, setPrimaryColor] = useState('#09090b');
   const [accentColor, setAccentColor] = useState('#71717a');
-  const [selectedFont, setSelectedFont] = useState('font-serif');
+  const [selectedFont, setSelectedFont] = useState('Times New Roman');
+  const [fontSize, setFontSize] = useState('12pt body text, 14–18pt headers');
   const [extractedPalette, setExtractedPalette] = useState<string[]>([]);
   const [headerLogo, setHeaderLogo] = useState<string | null>(null);
   const [density, setDensity] = useState<'minimal' | 'standard' | 'detailed'>('standard');
@@ -265,12 +302,24 @@ export default function App() {
     : '';
   const sourceImages = selectedSlide ? selectedSlide.images.map(i => i.dataUrl) : [];
 
-  // Style Reference: upload an existing graphic, get a suggested Proposal Subject.
+  // Style Reference: upload an existing graphic (or a PPTX and pick a slide),
+  // get a suggested Proposal Subject.
   const [styleRefDataUrl, setStyleRefDataUrl] = useState<string | null>(null);
   const [styleRefName, setStyleRefName] = useState<string>('');
+  const [styleDeck, setStyleDeck] = useState<ParsedSlide[] | null>(null);
+  const [styleDeckName, setStyleDeckName] = useState<string>('');
   const [styleSuggestion, setStyleSuggestion] = useState<string>('');
   const [styleSuggestionLoading, setStyleSuggestionLoading] = useState(false);
   const [styleSuggestionError, setStyleSuggestionError] = useState('');
+
+  // Revise an Image: upload any existing graphic; it becomes the visual
+  // starting point the engines evolve (same mechanism as slide selection).
+  const [reviseImage, setReviseImage] = useState<{ dataUrl: string; name: string } | null>(null);
+
+  // Projects: name a pursuit/solicitation; every render while it's selected
+  // gets tagged so it shows up grouped in History.
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   const colorFileInputRef = useRef<HTMLInputElement>(null);
   const logoFileInputRef = useRef<HTMLInputElement>(null);
@@ -293,10 +342,23 @@ export default function App() {
     if (firstDone !== -1) setSelectedSlotIndex(firstDone);
   }, [slots, selectedSlotIndex]);
 
+  // Typeface families most commonly permitted in federal solicitations.
   const fonts = [
-    { label: 'Times New Roman (11pt/12pt)', value: 'font-serif' },
-    { label: 'Arial (10pt/11pt)', value: 'font-sans' },
-    { label: 'Courier New (10pt)', value: 'font-mono' },
+    { label: 'Times New Roman', value: 'Times New Roman', css: '"Times New Roman", Times, serif', desc: 'Most common' },
+    { label: 'Arial', value: 'Arial', css: 'Arial, Helvetica, sans-serif', desc: 'Most common sans' },
+    { label: 'Calibri', value: 'Calibri', css: 'Calibri, "Segoe UI", sans-serif', desc: 'Modern default' },
+    { label: 'Garamond', value: 'Garamond', css: 'Garamond, "EB Garamond", serif', desc: 'Elegant serif' },
+    { label: 'Georgia', value: 'Georgia', css: 'Georgia, serif', desc: 'Readable serif' },
+    { label: 'Cambria', value: 'Cambria', css: 'Cambria, Georgia, serif', desc: 'Office serif' },
+    { label: 'Verdana', value: 'Verdana', css: 'Verdana, Geneva, sans-serif', desc: 'High legibility' },
+    { label: 'Arial Narrow', value: 'Arial Narrow', css: '"Arial Narrow", Arial, sans-serif', desc: 'Dense layouts' },
+  ];
+
+  // Type sizes most often called out in Section L formatting instructions.
+  const fontSizes = [
+    { label: '12pt body', value: '12pt body text, 14–18pt headers', desc: 'Most solicitations' },
+    { label: '11pt body', value: '11pt body text, 14–16pt headers', desc: 'Common alternative' },
+    { label: '10pt minimum', value: '10pt body text (the common minimum for tables and graphic callouts), 12–14pt headers', desc: 'Tables & graphics' },
   ];
 
   const densities = [
@@ -305,10 +367,33 @@ export default function App() {
     { label: 'Detailed', value: 'detailed', desc: 'Dense analytics' },
   ];
 
+  // Layout archetypes common in proposal graphics. Values stay in sync with
+  // FLOW_VALUES in server/src/lib/gpt5.ts so AI variants can pick them too.
   const flows = [
-    { label: 'Linear Phase', value: 'Linear Phase Model', desc: 'Sequential format.' },
-    { label: 'Hierarchical', value: 'Hierarchical Network', desc: 'Top-down organization.' },
-    { label: 'Abstract Matrix', value: 'Abstract Quadrant Matrix', desc: 'Relational data grids.' },
+    { label: 'Linear Phase', value: 'Linear Phase Model', desc: 'Sequential steps' },
+    { label: 'Hierarchical', value: 'Hierarchical Network', desc: 'Top-down org' },
+    { label: 'Quadrant Matrix', value: 'Abstract Quadrant Matrix', desc: 'Relational grid' },
+    { label: 'Swimlane', value: 'Swimlane Process Lanes', desc: 'Roles × phases' },
+    { label: 'Timeline', value: 'Milestone Timeline', desc: 'Schedule / PoP' },
+    { label: 'Hub & Spoke', value: 'Hub-and-Spoke Model', desc: 'Central capability' },
+    { label: 'Current → Future', value: 'Current-to-Future State Split', desc: 'Before / after' },
+    { label: 'Cycle Loop', value: 'Continuous Cycle Loop', desc: 'Recurring process' },
+    { label: 'Building Blocks', value: 'Stacked Capability Blocks', desc: 'Layered stack' },
+  ];
+
+  // Colors most commonly accepted in federal solicitations (USWDS-aligned
+  // plus standard print-safe neutrals).
+  const STANDARD_COLORS = [
+    { name: 'Black', hex: '#000000' },
+    { name: 'White', hex: '#FFFFFF' },
+    { name: 'Federal Navy', hex: '#1A4480' },
+    { name: 'USWDS Blue', hex: '#005EA2' },
+    { name: 'Dark Slate', hex: '#3D4551' },
+    { name: 'Steel Gray', hex: '#71767A' },
+    { name: 'Federal Red', hex: '#B50909' },
+    { name: 'Forest Green', hex: '#216E1F' },
+    { name: 'Gold', hex: '#C5A572' },
+    { name: 'Burgundy', hex: '#7A2E2E' },
   ];
 
   // Example PNGs ship as static assets in public/examples/. Slug mirrors the
@@ -512,15 +597,39 @@ export default function App() {
     setContextSummary('');
   };
 
-  // Style Reference handlers
-  const handleStyleRefUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Style Reference handlers. Accepts a plain image OR a .pptx — for decks we
+  // parse the slides and let the user pick which slide's graphic is the style.
+  const handleStyleRefUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setStyleSuggestionError('');
     setStyleSuggestion('');
+
+    if (file.name.toLowerCase().endsWith('.pptx')) {
+      try {
+        const parsed = await parsePptx(file);
+        const slidesWithGraphics = parsed.slides.filter(s => s.thumbnailDataUrl);
+        if (slidesWithGraphics.length === 0) {
+          setStyleSuggestionError('No graphics found in that deck — its slides are text-only. Upload an image instead.');
+        } else {
+          setStyleDeck(slidesWithGraphics);
+          setStyleDeckName(file.name);
+          // Pre-select the first graphic slide; user can switch below.
+          setStyleRefDataUrl(slidesWithGraphics[0].thumbnailDataUrl);
+          setStyleRefName(`${file.name} · slide ${slidesWithGraphics[0].index}`);
+        }
+      } catch (err: any) {
+        setStyleSuggestionError(err?.message || 'Failed to parse the deck.');
+      }
+      if (styleRefInputRef.current) styleRefInputRef.current.value = '';
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (ev) => {
       const dataUrl = ev.target?.result as string;
+      setStyleDeck(null);
+      setStyleDeckName('');
       setStyleRefDataUrl(dataUrl);
       setStyleRefName(file.name);
     };
@@ -532,8 +641,22 @@ export default function App() {
   const clearStyleRef = () => {
     setStyleRefDataUrl(null);
     setStyleRefName('');
+    setStyleDeck(null);
+    setStyleDeckName('');
     setStyleSuggestion('');
     setStyleSuggestionError('');
+  };
+
+  // Revise-an-image upload: any PNG/JPEG/WebP becomes the visual starting
+  // point for the next render (takes precedence over a selected slide).
+  const reviseImageInputRef = useRef<HTMLInputElement>(null);
+  const handleReviseImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setReviseImage({ dataUrl: ev.target?.result as string, name: file.name });
+    reader.readAsDataURL(file);
+    if (reviseImageInputRef.current) reviseImageInputRef.current.value = '';
   };
 
   const handleSuggestPrompt = async () => {
@@ -619,7 +742,7 @@ export default function App() {
         effectiveTopic,
         apiKey,
         payloadColors,
-        selectedFont,
+        `${selectedFont} · ${fontSize}`,
         headerLogo,
         slot.settings.density,
         slot.settings.flow,
@@ -638,6 +761,7 @@ export default function App() {
           // No slide reference on revisions — the prior render being revised
           // already embodies it; attaching both would muddle the edit.
           referenceImageBase64: null,
+          projectId: selectedProjectId,
         }
       );
 
@@ -685,7 +809,7 @@ export default function App() {
       effectiveTopic,
       '',
       payloadColors,
-      selectedFont,
+      `${selectedFont} · ${fontSize}`,
       headerLogo,
       slot.settings.density,
       slot.settings.flow,
@@ -701,7 +825,8 @@ export default function App() {
         variation: slot.variation,
         visualRhetoric: slot.visualRhetoric,
         sourceName: sourceName || undefined,
-        referenceImageBase64: selectedSlide?.thumbnailDataUrl ?? null,
+        referenceImageBase64: reviseImage?.dataUrl ?? selectedSlide?.thumbnailDataUrl ?? null,
+        projectId: selectedProjectId,
       },
       signal
     ).then(url => {
@@ -776,7 +901,7 @@ export default function App() {
         effectiveTopic,
         apiKey,
         payloadColors,
-        selectedFont,
+        `${selectedFont} · ${fontSize}`,
         headerLogo,
         slotSnapshot.settings.density,
         slotSnapshot.settings.flow,
@@ -792,9 +917,10 @@ export default function App() {
           variation: slotSnapshot.variation,
           visualRhetoric: slotSnapshot.visualRhetoric,
           sourceName: sourceName || undefined,
-          // The selected slide's graphic rides along as the visual starting
-          // point — the engines treat it as the base composition to evolve.
-          referenceImageBase64: selectedSlide?.thumbnailDataUrl ?? null,
+          // Visual starting point: an explicitly uploaded revise-image wins
+          // over a selected slide's graphic.
+          referenceImageBase64: reviseImage?.dataUrl ?? selectedSlide?.thumbnailDataUrl ?? null,
+          projectId: selectedProjectId,
         },
         signal
       ).then(url => {
@@ -1034,7 +1160,7 @@ export default function App() {
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase flex items-center gap-1.5">
-                    <FilePpt className="w-3 h-3" /> Reference Material · Optional
+                    <FilePpt className="w-3 h-3" /> Upload PowerPoint · Optional
                   </label>
                   {parsedDeck && (
                     <button
@@ -1088,7 +1214,7 @@ export default function App() {
                           <>
                             <UploadSimple className="w-4 h-4 text-zinc-500 mb-1" />
                             <span className="text-[12px] font-medium text-zinc-600">Drop a PowerPoint (.pptx)</span>
-                            <span className="text-[10px] text-zinc-400 mt-0.5">Text gets extracted and fed to GPT-5 reasoning</span>
+                            <span className="text-[10px] text-zinc-400 mt-0.5 text-center leading-tight">Pick the slide you want, describe your changes —<br />its graphic gets evolved, not replaced</span>
                           </>
                         )}
                       </button>
@@ -1196,7 +1322,52 @@ export default function App() {
                 )}
               </div>
 
-              {/* Style Reference: upload an existing graphic, get a suggested Proposal Subject. */}
+              {/* Revise an Image: upload any graphic; it becomes the visual starting point. */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase flex items-center gap-1.5">
+                    <ArrowsClockwise className="w-3 h-3" /> Revise an Image · Optional
+                  </label>
+                  {reviseImage && (
+                    <button
+                      type="button"
+                      onClick={() => setReviseImage(null)}
+                      className="text-[10px] text-zinc-400 hover:text-red-600 font-medium uppercase tracking-widest"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                {!reviseImage ? (
+                  <button
+                    type="button"
+                    onClick={() => reviseImageInputRef.current?.click()}
+                    className="w-full border-2 border-dashed border-zinc-200 rounded-xl py-3 px-3 flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-50 hover:border-zinc-300 transition-colors group"
+                  >
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      ref={reviseImageInputRef}
+                      onChange={handleReviseImageUpload}
+                    />
+                    <UploadSimple className="w-4 h-4 text-zinc-500 mb-1" />
+                    <span className="text-[12px] font-medium text-zinc-600">Upload a graphic to revise</span>
+                    <span className="text-[10px] text-zinc-400 mt-0.5 text-center leading-tight">Describe your changes in the Proposal Subject —<br />the engines evolve this image</span>
+                  </button>
+                ) : (
+                  <div className="w-full border border-emerald-200 bg-emerald-50 rounded-xl p-2.5 flex items-center gap-3">
+                    <img src={reviseImage.dataUrl} alt="Image to revise" className="h-16 w-20 object-cover rounded-md border border-emerald-200 shrink-0" />
+                    <div className="flex flex-col flex-1 min-w-0">
+                      <span className="text-[12px] font-bold text-zinc-900 truncate">{reviseImage.name}</span>
+                      <span className="text-[10px] text-emerald-700 leading-snug">This image is the visual starting point. Type the changes you want in the Proposal Subject and hit Render.</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Style Reference: upload an existing graphic (or PPTX), get a suggested Proposal Subject. */}
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase flex items-center gap-1.5">
@@ -1221,17 +1392,39 @@ export default function App() {
                   >
                     <input
                       type="file"
-                      accept="image/png,image/jpeg,image/webp"
+                      accept="image/png,image/jpeg,image/webp,.pptx"
                       className="hidden"
                       ref={styleRefInputRef}
                       onChange={handleStyleRefUpload}
                     />
                     <UploadSimple className="w-4 h-4 text-zinc-500 mb-1" />
-                    <span className="text-[12px] font-medium text-zinc-600">Upload existing graphic</span>
-                    <span className="text-[10px] text-zinc-400 mt-0.5">GPT-5 will suggest a prompt you can use</span>
+                    <span className="text-[12px] font-medium text-zinc-600">Upload a graphic or PowerPoint</span>
+                    <span className="text-[10px] text-zinc-400 mt-0.5">GPT-5 will suggest a prompt that matches its style</span>
                   </button>
                 ) : (
                   <div className="flex flex-col gap-2">
+                    {styleDeck && styleDeck.length > 1 && (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[9px] font-bold tracking-widest text-zinc-400 uppercase">Pick the slide whose style you want · {styleDeckName}</span>
+                        <div className="flex gap-1.5 overflow-x-auto pb-1.5 -mx-1 px-1">
+                          {styleDeck.map((slide) => (
+                            <button
+                              key={slide.index}
+                              type="button"
+                              onClick={() => {
+                                setStyleRefDataUrl(slide.thumbnailDataUrl);
+                                setStyleRefName(`${styleDeckName} · slide ${slide.index}`);
+                                setStyleSuggestion('');
+                              }}
+                              className={`relative shrink-0 w-[72px] h-[52px] rounded-md overflow-hidden border-2 transition-all ${styleRefDataUrl === slide.thumbnailDataUrl ? 'border-zinc-950 ring-2 ring-zinc-300' : 'border-zinc-200 hover:border-zinc-400'}`}
+                            >
+                              <img src={slide.thumbnailDataUrl!} alt={`Slide ${slide.index}`} className="w-full h-full object-cover" loading="lazy" />
+                              <span className="absolute top-0.5 left-0.5 bg-zinc-950/85 text-white text-[8px] font-bold px-1 rounded">{slide.index}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div className="w-full border border-zinc-200 rounded-xl p-2.5 flex items-center gap-3 bg-zinc-50/50">
                       <img src={styleRefDataUrl} alt="Style reference" className="h-16 w-20 object-cover rounded-md border border-zinc-200 shrink-0" />
                       <div className="flex flex-col flex-1 min-w-0 gap-1.5">
@@ -1280,27 +1473,52 @@ export default function App() {
                 <p className="text-[10px] font-bold text-zinc-400 tracking-widest uppercase mb-1 px-1">Customize</p>
 
                 {/* Brand */}
-                <Drawer title="Brand" icon={<Palette className="w-3.5 h-3.5 text-zinc-500" />}>
-                  {/* Typography */}
+                <Drawer title="Brand" icon={<TextAa className="w-3.5 h-3.5 text-zinc-500" />}>
+                  {/* Typography family */}
                   <div className="flex flex-col gap-3">
                     <label className="text-[12px] font-semibold text-zinc-800 tracking-wide flex items-center gap-2">
-                      <TextAa className="w-3.5 h-3.5 text-zinc-500" /> Typography Standard
+                      <TextAa className="w-3.5 h-3.5 text-zinc-500" /> Typeface
                     </label>
-                    <div className="flex flex-col gap-2">
+                    <div className="grid grid-cols-2 gap-1.5">
                       {fonts.map((f) => (
-                        <label key={f.value} className={`relative flex items-center gap-3 p-3 rounded-xl border border-zinc-200 cursor-pointer transition-all hover:bg-zinc-50 ${selectedFont === f.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white'}`}>
+                        <label key={f.value} className={`relative flex flex-col items-start gap-0.5 px-3 py-2 rounded-lg border cursor-pointer transition-all hover:bg-zinc-50 ${selectedFont === f.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white border-zinc-200'}`}>
                           <input
                             type="radio"
                             name="fontGroup"
                             value={f.value}
                             checked={selectedFont === f.value}
                             onChange={(e) => setSelectedFont(e.target.value)}
-                            className="w-4 h-4 text-zinc-950 focus:ring-zinc-950"
+                            className="hidden"
                           />
-                          <span className={`text-[13px] font-medium text-zinc-800 ${f.value}`}>{f.label}</span>
+                          <span className="text-[13px] font-medium text-zinc-900 leading-tight" style={{ fontFamily: f.css }}>{f.label}</span>
+                          <span className="text-[9px] text-zinc-500 font-medium">{f.desc}</span>
                         </label>
                       ))}
                     </div>
+                  </div>
+
+                  {/* Type size standard */}
+                  <div className="flex flex-col gap-2.5">
+                    <label className="text-[12px] font-semibold text-zinc-800 tracking-wide flex items-center gap-2">
+                      <Faders className="w-3.5 h-3.5 text-zinc-500" /> Type Size Standard
+                    </label>
+                    <div className="flex gap-1.5">
+                      {fontSizes.map((sz) => (
+                        <label key={sz.value} className={`flex-1 relative flex flex-col items-center justify-center p-2 rounded-lg border cursor-pointer transition-all hover:bg-zinc-50 ${fontSize === sz.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white border-zinc-200'}`}>
+                          <input
+                            type="radio"
+                            name="fontSizeGroup"
+                            value={sz.value}
+                            checked={fontSize === sz.value}
+                            onChange={(e) => setFontSize(e.target.value)}
+                            className="hidden"
+                          />
+                          <span className="text-[11px] font-bold text-zinc-800 tracking-tight leading-none mb-1">{sz.label}</span>
+                          <span className="text-[9px] text-zinc-500 font-medium text-center leading-[1.1]">{sz.desc}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-zinc-500 italic leading-snug">Section L instructions most often call out 12pt body text with Times New Roman or Arial; 10pt is the common floor for tables and graphic callouts.</p>
                   </div>
 
                   {/* Logo */}
@@ -1343,10 +1561,39 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Color Architecture */}
+                </Drawer>
+
+                {/* Color */}
+                <Drawer title="Color" icon={<Palette className="w-3.5 h-3.5 text-zinc-500" />}>
+                  {/* Standard solicitation colors */}
                   <div className="flex flex-col gap-2.5">
                     <label className="text-[12px] font-semibold text-zinc-800 tracking-wide flex items-center gap-2">
-                      <Palette className="w-3.5 h-3.5 text-zinc-500" /> Color Architecture
+                      <Palette className="w-3.5 h-3.5 text-zinc-500" /> Standard Colors
+                    </label>
+                    <p className="text-[10px] text-zinc-500 leading-snug -mt-1">The most commonly accepted colors in federal solicitations. Click to set Primary; click your Primary again to make it the Accent.</p>
+                    <div className="grid grid-cols-5 gap-1.5">
+                      {STANDARD_COLORS.map((c) => (
+                        <div key={c.hex} className="flex flex-col items-center gap-1">
+                          <button
+                            type="button"
+                            title={`${c.name} ${c.hex}`}
+                            onClick={() => {
+                              if (primaryColor === c.hex) setAccentColor(c.hex);
+                              else setPrimaryColor(c.hex);
+                            }}
+                            className={`w-full aspect-square rounded-lg border-2 shadow-inner transition-transform hover:scale-105 ${primaryColor === c.hex ? 'border-zinc-950 ring-2 ring-zinc-950/20' : accentColor === c.hex ? 'border-zinc-500 border-dashed' : 'border-black/10'}`}
+                            style={{ backgroundColor: c.hex }}
+                          ></button>
+                          <span className="text-[8px] font-medium text-zinc-500 text-center leading-[1.1]">{c.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Extract from brand image */}
+                  <div className="flex flex-col gap-2.5">
+                    <label className="text-[12px] font-semibold text-zinc-800 tracking-wide flex items-center gap-2">
+                      <UploadSimple className="w-3.5 h-3.5 text-zinc-500" /> Extract From Brand Image
                     </label>
 
                     <div
@@ -1459,20 +1706,20 @@ export default function App() {
                     <label className="text-[12px] font-semibold text-zinc-800 tracking-wide flex items-center gap-2">
                       <span className="w-3.5 h-3.5 border border-zinc-500 rounded-sm inline-flex"></span> Flow & Layout
                     </label>
-                    <div className="flex flex-col gap-2">
+                    <div className="grid grid-cols-3 gap-1.5">
                       {flows.map((f) => (
-                        <label key={f.value} className={`relative flex items-center gap-3 p-2.5 rounded-xl border border-zinc-200 cursor-pointer transition-all hover:bg-zinc-50 ${flow === f.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white'}`}>
+                        <label key={f.value} className={`relative flex flex-col items-center justify-center px-1.5 py-2 rounded-lg border cursor-pointer transition-all hover:bg-zinc-50 ${flow === f.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white border-zinc-200'}`}>
                           <input
                             type="radio"
                             name="flowGroup"
                             value={f.value}
                             checked={flow === f.value}
                             onChange={(e) => setFlow(e.target.value)}
-                            className="w-4 h-4 text-zinc-950 focus:ring-zinc-950"
+                            className="hidden"
                           />
-                          <div className="flex flex-col">
-                            <span className="text-[13px] font-medium text-zinc-800">{f.label}</span>
-                            <span className="text-[11px] font-medium text-zinc-500">{f.desc}</span>
+                          <div className="flex flex-col items-center">
+                            <span className="text-[10.5px] font-bold text-zinc-800 tracking-tight text-center leading-tight mb-0.5">{f.label}</span>
+                            <span className="text-[8.5px] font-medium text-zinc-500 text-center leading-[1.1]">{f.desc}</span>
                           </div>
                         </label>
                       ))}
@@ -1598,13 +1845,46 @@ export default function App() {
             onSubmit={handleGenerate}
             className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 md:p-6 flex flex-col gap-5"
           >
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
               <h2 className="text-[13px] font-bold tracking-widest uppercase text-zinc-950 flex items-center gap-2">
                 <Article weight="fill" className="w-3.5 h-3.5" /> Proposal Subject
               </h2>
-              <span className="text-[10px] font-mono text-zinc-500">
-                {enginesSelected.length * variationsSelected.length || 0} variant{(enginesSelected.length * variationsSelected.length) === 1 ? '' : 's'}
-              </span>
+              <div className="flex items-center gap-2.5">
+                <span className="text-[10px] font-mono text-zinc-500">
+                  {enginesSelected.length * variationsSelected.length || 0} variant{(enginesSelected.length * variationsSelected.length) === 1 ? '' : 's'}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleClearEverything}
+                  className="px-3 py-1.5 border-2 border-red-300 text-red-700 hover:bg-red-50 hover:border-red-400 text-[11px] font-bold uppercase tracking-wide rounded-lg transition-colors flex items-center gap-1.5"
+                  title="Reset the prompt, results, and all uploads. Saved History is kept."
+                >
+                  <Trash weight="bold" className="w-3.5 h-3.5" /> Clear Everything
+                </button>
+              </div>
+            </div>
+
+            {/* Project — name a pursuit and every render gets filed under it */}
+            <div className="flex items-center gap-2 -mt-1">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 shrink-0">Project</label>
+              <select
+                value={selectedProjectId ?? ''}
+                onChange={(e) => setSelectedProjectId(e.target.value || null)}
+                className="flex-1 min-w-0 bg-zinc-50 border border-zinc-200 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
+              >
+                <option value="">No project — unfiled</option>
+                {projects.map(p => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.render_count})</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handleCreateProject}
+                className="px-2.5 py-1.5 bg-zinc-950 hover:bg-zinc-800 text-white text-[10px] font-bold uppercase tracking-wide rounded-lg shrink-0"
+                title="Create a new project (e.g. a solicitation)"
+              >
+                + New
+              </button>
             </div>
 
             <textarea
@@ -1823,24 +2103,24 @@ export default function App() {
                     <button
                       onClick={() => setIsRevising(!isRevising)}
                       disabled={selectedSlot?.status !== 'done'}
-                      className={`px-2 py-1 text-[10px] uppercase tracking-wider rounded transition-colors font-bold cursor-pointer border disabled:opacity-30 disabled:cursor-not-allowed ${isRevising ? 'bg-white text-zinc-950 border-white' : 'bg-transparent border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500'}`}
+                      className={`px-4 py-2 text-[12px] uppercase tracking-wide rounded-lg transition-colors font-bold cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shadow-sm ${isRevising ? 'bg-zinc-700 text-white' : 'bg-amber-400 hover:bg-amber-300 text-zinc-950'}`}
                     >
-                      {isRevising ? 'Cancel Edit' : 'Revise Variant'}
+                      {isRevising ? 'Cancel Edit' : '✎ Revise'}
                     </button>
                     <button
                       onClick={() => setPreviewOpen(true)}
                       disabled={selectedSlot?.status !== 'done'}
-                      className="px-2 py-1 text-[10px] uppercase tracking-wider rounded transition-colors font-bold cursor-pointer border bg-transparent border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="px-3 py-2 text-[11px] uppercase tracking-wide rounded-lg transition-colors font-bold cursor-pointer border border-zinc-600 text-zinc-300 hover:text-white hover:border-zinc-400 disabled:opacity-30 disabled:cursor-not-allowed"
                       title="See how this variant looks placed inside a Word document"
                     >
                       Preview in Word
                     </button>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-zinc-600 text-xs font-mono font-medium mr-1.5 hidden md:block">EXPORT</span>
-                    <button onClick={() => downloadImage('png')} disabled={selectedSlot?.status !== 'done'} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white text-xs rounded-md transition-colors font-medium cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">PNG</button>
-                    <button onClick={() => downloadImage('jpeg')} disabled={selectedSlot?.status !== 'done'} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white text-xs rounded-md transition-colors font-medium cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">JPEG</button>
-                    <button onClick={() => downloadImage('webp')} disabled={selectedSlot?.status !== 'done'} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white text-xs rounded-md transition-colors font-medium cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">WEBP</button>
+                    <span className="text-zinc-500 text-[11px] font-mono font-bold mr-1 hidden md:block">DOWNLOAD</span>
+                    <button onClick={() => downloadImage('png')} disabled={selectedSlot?.status !== 'done'} className="px-4 py-2 bg-white hover:bg-zinc-100 text-zinc-950 text-[12px] font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shadow-sm">PNG ⬇</button>
+                    <button onClick={() => downloadImage('jpeg')} disabled={selectedSlot?.status !== 'done'} className="px-4 py-2 bg-white hover:bg-zinc-100 text-zinc-950 text-[12px] font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shadow-sm">JPEG ⬇</button>
+                    <button onClick={() => downloadImage('webp')} disabled={selectedSlot?.status !== 'done'} className="px-4 py-2 bg-white hover:bg-zinc-100 text-zinc-950 text-[12px] font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shadow-sm">WEBP ⬇</button>
                   </div>
                 </div>
               </div>

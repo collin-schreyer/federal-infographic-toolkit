@@ -26,7 +26,7 @@ export const generateInfographicImage = async (
   revisionPrompt: string | null = null,
   contextText: string | null = null,
   overrides?: VariantOverrides,
-  meta?: { variation?: 'baseline' | 'tuned' | 'reimagined'; visualRhetoric?: string; sourceName?: string; referenceImageBase64?: string | null },
+  meta?: { variation?: 'baseline' | 'tuned' | 'reimagined'; visualRhetoric?: string; sourceName?: string; referenceImageBase64?: string | null; projectId?: string | null },
   signal?: AbortSignal,
 ): Promise<string> => {
   const { dataUrl } = await api.post<RenderResponse>('/api/render', {
@@ -49,6 +49,7 @@ export const generateInfographicImage = async (
     visualRhetoric: meta?.visualRhetoric,
     sourceName: meta?.sourceName,
     referenceImageBase64: meta?.referenceImageBase64 ?? null,
+    project_id: meta?.projectId ?? null,
   }, signal);
   return dataUrl;
 };

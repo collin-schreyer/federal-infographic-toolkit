@@ -77,6 +77,14 @@ export interface RenderHistoryItem {
   visual_rhetoric: string | null;
   source_name: string | null;
   created_at: number;
+  project_id: string | null;
   image_url: string;
   settings: any;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  created_at: number;
+  render_count: number;
 }

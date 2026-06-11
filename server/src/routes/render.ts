@@ -32,6 +32,7 @@ interface RenderBody {
   variation?: 'baseline' | 'tuned' | 'reimagined';
   visualRhetoric?: string;
   sourceName?: string;
+  project_id?: string | null;
 }
 
 // Persist the generated image to disk + DB so it shows up in the user's history.
@@ -48,12 +49,19 @@ function persistRender(
   const filePath = join(userDir, `${id}.png`);
   writeFileSync(filePath, Buffer.from(b64, 'base64'));
 
+  // Only tag with a project the user actually owns; silently drop otherwise.
+  let projectId: string | null = null;
+  if (body.project_id) {
+    const proj = db.prepare('SELECT user_id FROM projects WHERE id = ?').get(body.project_id) as { user_id: string } | undefined;
+    if (proj && proj.user_id === user.id) projectId = body.project_id;
+  }
+
   const createdAt = Date.now();
   db.prepare(`
     INSERT INTO renders (
       id, user_id, topic, variation, engine, visual_rhetoric,
-      settings_json, source_name, image_path, thumbnail_path, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+      settings_json, source_name, image_path, thumbnail_path, created_at, project_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
   `).run(
     id,
     user.id,
@@ -75,6 +83,7 @@ function persistRender(
     body.sourceName || null,
     filePath,
     createdAt,
+    projectId,
   );
 
   return { id, createdAt };

@@ -17,24 +17,36 @@ interface RenderRow {
   image_path: string;
   thumbnail_path: string | null;
   created_at: number;
+  project_id: string | null;
 }
 
-// Paginated list of current user's renders, newest first.
+// Paginated list of current user's renders, newest first. Optional ?project=
+// filter scopes to one project ('none' = untagged renders only).
 history.get('/renders', requireAuth, (c) => {
   const user = c.get('user') as PublicUser;
   const limit = Math.min(parseInt(c.req.query('limit') || '50', 10), 200);
   const offset = parseInt(c.req.query('offset') || '0', 10);
+  const project = c.req.query('project');
+
+  let where = 'user_id = ?';
+  const params: unknown[] = [user.id];
+  if (project === 'none') {
+    where += ' AND project_id IS NULL';
+  } else if (project) {
+    where += ' AND project_id = ?';
+    params.push(project);
+  }
 
   const rows = db.prepare(`
     SELECT id, user_id, topic, variation, engine, visual_rhetoric,
-           settings_json, source_name, image_path, thumbnail_path, created_at
+           settings_json, source_name, image_path, thumbnail_path, created_at, project_id
     FROM renders
-    WHERE user_id = ?
+    WHERE ${where}
     ORDER BY created_at DESC
     LIMIT ? OFFSET ?
-  `).all(user.id, limit, offset) as RenderRow[];
+  `).all(...params, limit, offset) as RenderRow[];
 
-  const total = (db.prepare('SELECT COUNT(*) as n FROM renders WHERE user_id = ?').get(user.id) as { n: number }).n;
+  const total = (db.prepare(`SELECT COUNT(*) as n FROM renders WHERE ${where}`).get(...params) as { n: number }).n;
 
   return c.json({
     total,
@@ -48,6 +60,7 @@ history.get('/renders', requireAuth, (c) => {
       visual_rhetoric: r.visual_rhetoric,
       source_name: r.source_name,
       created_at: r.created_at,
+      project_id: r.project_id,
       // Don't ship the image bytes in the list response; client fetches each as needed.
       image_url: `/api/renders/${r.id}/image`,
       settings: JSON.parse(r.settings_json),
