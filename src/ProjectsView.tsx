@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { CircleNotch, CaretLeft, Trash, Plus, FolderOpen, WarningCircle } from '@phosphor-icons/react';
-import { api, type PublicUser, type Project } from './lib/api';
+import { CircleNotch, CaretLeft, Trash, Plus, FolderOpen, WarningCircle, UsersThree } from '@phosphor-icons/react';
+import { api, type PublicUser, type Project, type ProjectMember } from './lib/api';
 
 interface Props {
   currentUser: PublicUser;
@@ -17,6 +17,52 @@ const ProjectsView: React.FC<Props> = ({ currentUser, onBack, onLogout, onOpenPr
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // Share modal state
+  const [shareProject, setShareProject] = useState<Project | null>(null);
+  const [members, setMembers] = useState<ProjectMember[]>([]);
+  const [memberEmail, setMemberEmail] = useState('');
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState('');
+
+  const openShare = async (p: Project) => {
+    setShareProject(p);
+    setMembers([]);
+    setMemberEmail('');
+    setShareError('');
+    try {
+      const d = await api.get<{ members: ProjectMember[] }>(`/api/projects/${p.id}/members`);
+      setMembers(d.members);
+    } catch (err: any) {
+      setShareError(err?.message || 'Failed to load members.');
+    }
+  };
+
+  const handleAddMember = async () => {
+    if (!shareProject || !memberEmail.trim()) return;
+    setShareBusy(true);
+    setShareError('');
+    try {
+      const d = await api.post<{ member: ProjectMember }>(`/api/projects/${shareProject.id}/members`, { email: memberEmail.trim() });
+      setMembers(prev => prev.some(m => m.id === d.member.id) ? prev : [...prev, d.member]);
+      setMemberEmail('');
+      refresh();
+    } catch (err: any) {
+      setShareError(err?.message || 'Failed to add member.');
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const handleRemoveMember = async (m: ProjectMember) => {
+    if (!shareProject) return;
+    try {
+      await api.delete(`/api/projects/${shareProject.id}/members/${m.id}`);
+      setMembers(prev => prev.filter(x => x.id !== m.id));
+      refresh();
+    } catch (err: any) {
+      setShareError(err?.message || 'Failed to remove member.');
+    }
+  };
 
   const refresh = async () => {
     setLoading(true);
@@ -119,8 +165,12 @@ const ProjectsView: React.FC<Props> = ({ currentUser, onBack, onLogout, onOpenPr
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-[14px] font-bold text-zinc-900 truncate">{p.name}</p>
-                  <p className="text-[10px] font-mono text-zinc-500">
-                    {p.render_count} image{p.render_count === 1 ? '' : 's'} · created {new Date(p.created_at).toLocaleDateString()}
+                  <p className="text-[10px] font-mono text-zinc-500 truncate">
+                    {p.render_count} image{p.render_count === 1 ? '' : 's'}
+                    {p.is_owner
+                      ? (p.member_count > 0 ? ` · shared with ${p.member_count}` : '')
+                      : ` · shared by ${p.owner_email}`}
+                    {' · '}{new Date(p.created_at).toLocaleDateString()}
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
@@ -131,19 +181,91 @@ const ProjectsView: React.FC<Props> = ({ currentUser, onBack, onLogout, onOpenPr
                   >
                     + Add
                   </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleDelete(p); }}
-                    className="text-zinc-400 hover:text-red-600 p-1.5 rounded hover:bg-red-50 transition-colors"
-                    title="Delete project (images are kept as Unfiled)"
-                  >
-                    <Trash className="w-4 h-4" />
-                  </button>
+                  {p.is_owner && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openShare(p); }}
+                      className="px-2 py-1.5 border border-zinc-300 hover:bg-zinc-100 text-zinc-700 text-[10px] font-bold uppercase tracking-wide rounded-md flex items-center gap-1"
+                      title="Share this project with teammates"
+                    >
+                      <UsersThree weight="bold" className="w-3.5 h-3.5" /> Share
+                    </button>
+                  )}
+                  {(p.is_owner || currentUser.role === 'admin') && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDelete(p); }}
+                      className="text-zinc-400 hover:text-red-600 p-1.5 rounded hover:bg-red-50 transition-colors"
+                      title="Delete project (images are kept as Unfiled)"
+                    >
+                      <Trash className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               </motion.div>
             ))}
           </div>
         )}
       </main>
+
+      {/* Share / members modal */}
+      {shareProject && (
+        <div onClick={() => setShareProject(null)} className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-6 cursor-pointer">
+          <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-xl max-w-md w-full p-6 cursor-default flex flex-col gap-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-[14px] font-bold text-zinc-950 truncate">Share "{shareProject.name}"</h2>
+                <p className="text-[11px] text-zinc-500 mt-0.5">Teammates can see every image in this project and add their own renders to it.</p>
+              </div>
+              <button onClick={() => setShareProject(null)} className="text-zinc-400 hover:text-zinc-950 text-xl leading-none px-1">×</button>
+            </div>
+
+            {shareError && (
+              <div className="px-3 py-2 border border-red-200 bg-red-50 rounded-lg text-[11px] text-red-700">{shareError}</div>
+            )}
+
+            <div className="flex gap-2">
+              <input
+                type="email"
+                value={memberEmail}
+                onChange={(e) => setMemberEmail(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddMember(); } }}
+                placeholder="teammate@bna-inc.com"
+                className="flex-1 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-[13px] focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
+              />
+              <button
+                onClick={handleAddMember}
+                disabled={shareBusy || !memberEmail.trim()}
+                className="px-3.5 py-2 bg-zinc-950 hover:bg-zinc-800 text-white text-[11px] font-bold uppercase tracking-wide rounded-lg disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {shareBusy && <CircleNotch className="w-3.5 h-3.5 animate-spin" />}
+                Add
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[9px] font-bold uppercase tracking-widest text-zinc-500">Members</span>
+              {members.length === 0 ? (
+                <p className="text-[12px] text-zinc-400 italic">No teammates yet — add one by email above.</p>
+              ) : members.map(m => (
+                <div key={m.id} className="flex items-center justify-between gap-2 px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg">
+                  <div className="min-w-0">
+                    <span className="text-[12px] font-medium text-zinc-900 truncate block">{m.email}</span>
+                    {m.name && <span className="text-[10px] text-zinc-500">{m.name}</span>}
+                  </div>
+                  <button
+                    onClick={() => handleRemoveMember(m)}
+                    className="text-zinc-400 hover:text-red-600 p-1 rounded hover:bg-red-50"
+                    title="Remove from project"
+                  >
+                    <Trash className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-[10px] text-zinc-400 leading-snug">The teammate needs an existing account — ask an admin to create one if their email isn't recognized.</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

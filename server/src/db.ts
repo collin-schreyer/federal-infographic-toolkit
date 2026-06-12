@@ -67,6 +67,18 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS project_members (
+    project_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    added_by TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, user_id),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id);
 `);
 
 // Idempotent migration: tag renders with an optional project. SQLite's

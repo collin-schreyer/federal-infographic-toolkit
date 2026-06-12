@@ -7,6 +7,7 @@ import { db, UPLOADS_DIR, type PublicUser } from '../db.js';
 import { generateInfographicImage as generateOpenAI } from '../lib/openai.js';
 import { generateInfographicImage as generateGemini } from '../lib/gemini.js';
 import { compositeLogo } from '../lib/composite.js';
+import { projectRole } from './projects.js';
 import type { VariantOverrides } from '../lib/variant-overrides.js';
 
 const render = new Hono();
@@ -49,11 +50,10 @@ function persistRender(
   const filePath = join(userDir, `${id}.png`);
   writeFileSync(filePath, Buffer.from(b64, 'base64'));
 
-  // Only tag with a project the user actually owns; silently drop otherwise.
+  // Only tag with a project the user owns or is a member of; drop otherwise.
   let projectId: string | null = null;
-  if (body.project_id) {
-    const proj = db.prepare('SELECT user_id FROM projects WHERE id = ?').get(body.project_id) as { user_id: string } | undefined;
-    if (proj && proj.user_id === user.id) projectId = body.project_id;
+  if (body.project_id && projectRole(body.project_id, user.id)) {
+    projectId = body.project_id;
   }
 
   const createdAt = Date.now();

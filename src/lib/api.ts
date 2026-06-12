@@ -78,6 +78,7 @@ export interface RenderHistoryItem {
   source_name: string | null;
   created_at: number;
   project_id: string | null;
+  creator_email: string;
   image_url: string;
   settings: any;
 }
@@ -87,4 +88,13 @@ export interface Project {
   name: string;
   created_at: number;
   render_count: number;
+  member_count: number;
+  owner_email: string;
+  is_owner: boolean;
+}
+
+export interface ProjectMember {
+  id: string;
+  email: string;
+  name: string | null;
 }

@@ -10,6 +10,8 @@ interface Props {
   // Loads this render into the generator as the image-to-revise and
   // navigates back so the user can describe their changes.
   onMakeRevision: (item: RenderHistoryItem) => void;
+  // Restores the render's prompt + every panel setting into the generator.
+  onReuseSettings: (item: RenderHistoryItem) => void;
   // When set, the gallery is locked to this single project: header shows the
   // project name and the filter dropdown is hidden. Used by the Projects view.
   project?: Project | null;
@@ -25,7 +27,7 @@ const variationBadge = (v: 'baseline' | 'tuned' | 'reimagined') =>
 const engineBadge = (e: 'openai' | 'gemini') =>
   e === 'openai' ? 'bg-emerald-500 text-white' : 'bg-blue-500 text-white';
 
-const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout, onMakeRevision, project = null, onAddImages }) => {
+const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout, onMakeRevision, onReuseSettings, project = null, onAddImages }) => {
   const [items, setItems] = useState<RenderHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -158,29 +160,41 @@ const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout, onMakeRev
                   <img src={item.image_url} alt={item.topic} loading="lazy" className="w-full h-full object-cover" />
                   <div className={`absolute top-2 left-2 text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${variationBadge(item.variation)}`}>{item.variation}</div>
                   <div className={`absolute top-2 right-2 text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${engineBadge(item.engine)}`}>{item.engine === 'openai' ? 'GPT' : 'GEM'}</div>
-                  {/* Hover CTA: jump back to the generator with this image preloaded */}
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); onMakeRevision(item); }}
-                    className="absolute inset-x-2 bottom-2 opacity-0 group-hover:opacity-100 transition-opacity bg-amber-400 hover:bg-amber-300 text-zinc-950 text-[11px] font-bold uppercase tracking-wide py-2 rounded-md shadow-lg"
-                    title="Load this image into the generator and describe your changes"
-                  >
-                    ✎ Make Revision
-                  </button>
+                  {/* Hover CTAs: revise the image, or re-run with its settings */}
+                  <div className="absolute inset-x-2 bottom-2 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-1">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onMakeRevision(item); }}
+                      className="bg-amber-400 hover:bg-amber-300 text-zinc-950 text-[11px] font-bold uppercase tracking-wide py-1.5 rounded-md shadow-lg"
+                      title="Load this image into the generator and describe your changes"
+                    >
+                      ✎ Make Revision
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onReuseSettings(item); }}
+                      className="bg-white/95 hover:bg-white text-zinc-950 text-[11px] font-bold uppercase tracking-wide py-1.5 rounded-md shadow-lg"
+                      title="Restore this render's prompt, colors, fonts, size, and flow in the generator"
+                    >
+                      ↺ Reuse Settings
+                    </button>
+                  </div>
                 </div>
                 <div className="p-3 flex flex-col gap-2">
                   <p className="text-[11px] text-zinc-900 font-medium line-clamp-2 leading-snug" title={item.topic}>{item.topic}</p>
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[9px] font-mono text-zinc-400 truncate">
-                      {projectName(item.project_id) ? `${projectName(item.project_id)} · ` : ''}{new Date(item.created_at).toLocaleDateString()} · {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {item.creator_email && item.creator_email !== currentUser.email ? `${item.creator_email} · ` : ''}{projectName(item.project_id) && !project ? `${projectName(item.project_id)} · ` : ''}{new Date(item.created_at).toLocaleDateString()} · {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                     <div className="flex items-center gap-1">
                       <button onClick={() => handleDownload(item)} className="text-zinc-400 hover:text-zinc-900 p-1 rounded hover:bg-zinc-100 transition-colors" title="Download PNG">
                         <DownloadSimple className="w-3.5 h-3.5" />
                       </button>
-                      <button onClick={() => handleDelete(item.id)} className="text-zinc-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors" title="Delete">
-                        <Trash className="w-3.5 h-3.5" />
-                      </button>
+                      {(!item.creator_email || item.creator_email === currentUser.email || currentUser.role === 'admin') && (
+                        <button onClick={() => handleDelete(item.id)} className="text-zinc-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors" title="Delete">
+                          <Trash className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -201,6 +215,7 @@ const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout, onMakeRev
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button onClick={() => onMakeRevision(selected)} className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-zinc-950 text-[11px] font-bold uppercase tracking-wide rounded">✎ Make Revision</button>
+                <button onClick={() => onReuseSettings(selected)} className="px-3 py-1.5 border border-zinc-300 text-zinc-800 hover:bg-zinc-50 text-[11px] font-bold uppercase tracking-wide rounded">↺ Reuse Settings</button>
                 <button onClick={() => handleDownload(selected)} className="px-3 py-1.5 bg-zinc-950 hover:bg-zinc-800 text-white text-[11px] font-bold uppercase tracking-wide rounded">Download PNG</button>
                 <button onClick={() => handleDelete(selected.id)} className="px-3 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 text-[11px] font-bold uppercase tracking-wide rounded">Delete</button>
                 <button onClick={() => setSelected(null)} className="px-3 py-1.5 border border-zinc-200 text-zinc-700 hover:bg-zinc-50 text-[11px] font-bold uppercase tracking-wide rounded">Close</button>

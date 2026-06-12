@@ -44,6 +44,10 @@ import {
   ArrowDown,
   FileDoc,
   ArrowsClockwise,
+  FolderOpen,
+  ClockCounterClockwise,
+  UsersThree,
+  SignOut,
 } from '@phosphor-icons/react';
 
 import Landing from './Landing';
@@ -238,6 +242,40 @@ export default function App() {
       setError(err?.message || 'Failed to load that render for revision.');
       setView('generator');
     }
+  };
+
+  // From History: restore a saved render's prompt + every panel setting so
+  // the user can tweak and re-run. Image is NOT loaded (Make Revision does
+  // that) — this is settings-recall.
+  const handleReuseSettings = (item: RenderHistoryItem) => {
+    const s = item.settings || {};
+    setTopic(item.topic || '');
+    if (Array.isArray(s.colors)) {
+      if (typeof s.colors[0] === 'string') setPrimaryColor(s.colors[0]);
+      if (typeof s.colors[1] === 'string') setAccentColor(s.colors[1]);
+    }
+    if (typeof s.fontFamily === 'string') {
+      // Legacy renders stored class tokens; newer ones store "Family · size".
+      const legacy: Record<string, string> = { 'font-serif': 'Times New Roman', 'font-sans': 'Arial', 'font-mono': 'Times New Roman' };
+      if (legacy[s.fontFamily]) {
+        setSelectedFont(legacy[s.fontFamily]);
+      } else {
+        const [family, size] = s.fontFamily.split(' · ');
+        if (family) setSelectedFont(family);
+        if (size) setFontSize(size);
+      }
+    }
+    if (s.density) setDensity(s.density);
+    if (s.flow) setFlow(s.flow);
+    if (s.orientation) setOrientation(s.orientation);
+    if (s.accessibility) setAccessibility(s.accessibility);
+    if (s.iconography) setIconography(s.iconography);
+    if (typeof s.isTransparent === 'boolean') setIsTransparent(s.isTransparent);
+    if (item.project_id) setSelectedProjectId(item.project_id);
+    setReviseImage(null);
+    setOpenProject(null);
+    setView('generator');
+    window.scrollTo({ top: 0 });
   };
 
   // Reset the whole workspace back to a blank slate (renders already saved
@@ -508,10 +546,18 @@ export default function App() {
       });
   };
 
-  const handleColorImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Drag-and-drop support for every upload zone: spread {...dropProps(fn)}
+  // onto a zone and dropping a file behaves exactly like browsing for it.
+  const dropProps = (onFile: (f: File) => void) => ({
+    onDragOver: (e: React.DragEvent) => { e.preventDefault(); },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      const f = e.dataTransfer.files?.[0];
+      if (f) onFile(f);
+    },
+  });
 
+  const processColorFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = (event) => {
       const imgUrl = event.target?.result as string;
@@ -533,6 +579,11 @@ export default function App() {
       };
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleColorImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processColorFile(file);
   };
 
   // Kick off a short GPT-5 summary so the user can see what was captured.
@@ -571,10 +622,7 @@ export default function App() {
     }
   };
 
-  const handleSourceFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processSourceFile = async (file: File) => {
     console.log('[upload] File selected:', { name: file.name, size: file.size, type: file.type });
 
     setSourceError('');
@@ -604,6 +652,10 @@ export default function App() {
       setSourceParseLoading(false);
       if (sourceFileInputRef.current) sourceFileInputRef.current.value = '';
     }
+  };
+  const handleSourceFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) await processSourceFile(file);
   };
 
   const handlePastedTextApply = () => {
@@ -639,9 +691,7 @@ export default function App() {
 
   // Style Reference handlers. Accepts a plain image OR a .pptx — for decks we
   // parse the slides and let the user pick which slide's graphic is the style.
-  const handleStyleRefUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processStyleFile = async (file: File) => {
     setStyleSuggestionError('');
     setStyleSuggestion('');
 
@@ -677,6 +727,10 @@ export default function App() {
     reader.readAsDataURL(file);
     if (styleRefInputRef.current) styleRefInputRef.current.value = '';
   };
+  const handleStyleRefUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) await processStyleFile(file);
+  };
 
   const clearStyleRef = () => {
     setStyleRefDataUrl(null);
@@ -690,13 +744,15 @@ export default function App() {
   // Revise-an-image upload: any PNG/JPEG/WebP becomes the visual starting
   // point for the next render (takes precedence over a selected slide).
   const reviseImageInputRef = useRef<HTMLInputElement>(null);
-  const handleReviseImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processReviseFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = (ev) => setReviseImage({ dataUrl: ev.target?.result as string, name: file.name });
     reader.readAsDataURL(file);
     if (reviseImageInputRef.current) reviseImageInputRef.current.value = '';
+  };
+  const handleReviseImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processReviseFile(file);
   };
 
   const handleSuggestPrompt = async () => {
@@ -720,16 +776,17 @@ export default function App() {
     if (styleSuggestion.trim()) setTopic(styleSuggestion.trim());
   };
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processLogoFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = (event) => {
       const base64Url = event.target?.result as string;
       setHeaderLogo(base64Url);
     };
     reader.readAsDataURL(file);
+  };
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processLogoFile(file);
   };
 
   const downloadImage = (format: 'png' | 'jpeg' | 'webp') => {
@@ -1128,6 +1185,7 @@ export default function App() {
           onBack={() => setOpenProject(null)}
           onLogout={handleLogout}
           onMakeRevision={handleMakeRevision}
+          onReuseSettings={handleReuseSettings}
           onAddImages={() => {
             setSelectedProjectId(openProject.id);
             setOpenProject(null);
@@ -1156,7 +1214,7 @@ export default function App() {
   if (view === 'history' && currentUser) {
     return (
       <React.Suspense fallback={<ViewLoading />}>
-        <HistoryView currentUser={currentUser} onBack={() => setView('generator')} onLogout={handleLogout} onMakeRevision={handleMakeRevision} />
+        <HistoryView currentUser={currentUser} onBack={() => setView('generator')} onLogout={handleLogout} onMakeRevision={handleMakeRevision} onReuseSettings={handleReuseSettings} />
       </React.Suspense>
     );
   }
@@ -1188,50 +1246,50 @@ export default function App() {
                 <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest leading-none">Compliance & Proposals</p>
               </div>
             </div>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setPreviewOpen(true)}
-                className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 rounded transition-all"
-                title="Preview a graphic in a Word-page mockup"
-              >
-                Preview
-              </button>
+            <nav className="flex items-center gap-1.5 flex-wrap justify-end">
               <button
                 type="button"
                 onClick={() => { setOpenProject(null); setView('projects'); }}
-                className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 rounded transition-all"
-                title="Organize images by pursuit / solicitation"
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 bg-white hover:bg-zinc-950 hover:text-white hover:border-zinc-950 text-zinc-700 rounded-lg text-[11px] font-bold tracking-wide transition-all"
+                title="Organize images by pursuit / solicitation — share with teammates"
               >
-                Projects
+                <FolderOpen weight="fill" className="w-3.5 h-3.5" /> Projects
               </button>
               <button
                 type="button"
                 onClick={() => setView('history')}
-                className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 rounded transition-all"
-                title="View your past renders"
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 bg-white hover:bg-zinc-950 hover:text-white hover:border-zinc-950 text-zinc-700 rounded-lg text-[11px] font-bold tracking-wide transition-all"
+                title="Every image you've rendered"
               >
-                History
+                <ClockCounterClockwise weight="bold" className="w-3.5 h-3.5" /> History
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 bg-white hover:bg-zinc-950 hover:text-white hover:border-zinc-950 text-zinc-700 rounded-lg text-[11px] font-bold tracking-wide transition-all"
+                title="Preview a graphic in a Word-page mockup"
+              >
+                <FileDoc weight="bold" className="w-3.5 h-3.5" /> Preview
               </button>
               {currentUser?.role === 'admin' && (
                 <button
                   type="button"
                   onClick={() => setView('admin')}
-                  className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 rounded transition-all"
-                  title="Manage users"
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 bg-white hover:bg-zinc-950 hover:text-white hover:border-zinc-950 text-zinc-700 rounded-lg text-[11px] font-bold tracking-wide transition-all"
+                  title="Manage users and view usage"
                 >
-                  Admin
+                  <UsersThree weight="bold" className="w-3.5 h-3.5" /> Admin
                 </button>
               )}
               <button
                 type="button"
                 onClick={handleLogout}
-                className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded transition-all"
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-transparent text-zinc-400 hover:text-red-600 hover:bg-red-50 hover:border-red-200 rounded-lg text-[11px] font-bold tracking-wide transition-all"
                 title={currentUser ? `Sign out (${currentUser.email})` : 'Sign out'}
               >
-                Sign Out
+                <SignOut weight="bold" className="w-3.5 h-3.5" /> Sign Out
               </button>
-            </div>
+            </nav>
           </div>
 
           <div className="flex-grow">
@@ -1279,6 +1337,7 @@ export default function App() {
                         type="button"
                         onClick={() => sourceFileInputRef.current?.click()}
                         disabled={sourceParseLoading}
+                        {...dropProps(processSourceFile)}
                         className="w-full border-2 border-dashed border-zinc-200 rounded-xl py-3 px-3 flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-50 hover:border-zinc-300 transition-colors group disabled:opacity-50"
                       >
                         <input
@@ -1425,6 +1484,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => reviseImageInputRef.current?.click()}
+                    {...dropProps(processReviseFile)}
                     className="w-full border-2 border-dashed border-zinc-200 rounded-xl py-3 px-3 flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-50 hover:border-zinc-300 transition-colors group"
                   >
                     <input
@@ -1470,6 +1530,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => styleRefInputRef.current?.click()}
+                    {...dropProps(processStyleFile)}
                     className="w-full border-2 border-dashed border-zinc-200 rounded-xl py-3 px-3 flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-50 hover:border-zinc-300 transition-colors group"
                   >
                     <input
@@ -1621,6 +1682,7 @@ export default function App() {
                     {!headerLogo ? (
                       <div
                         onClick={() => logoFileInputRef.current?.click()}
+                        {...dropProps(processLogoFile)}
                         className="w-full border-2 border-dashed border-zinc-200 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-50 hover:border-zinc-300 transition-colors group"
                       >
                         <input
@@ -1733,6 +1795,7 @@ export default function App() {
 
                     <div
                       onClick={() => colorFileInputRef.current?.click()}
+                      {...dropProps(processColorFile)}
                       className="w-full border-2 border-dashed border-zinc-200 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-50 hover:border-zinc-300 transition-colors group"
                     >
                       <input
