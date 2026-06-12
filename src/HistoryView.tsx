@@ -10,6 +10,12 @@ interface Props {
   // Loads this render into the generator as the image-to-revise and
   // navigates back so the user can describe their changes.
   onMakeRevision: (item: RenderHistoryItem) => void;
+  // When set, the gallery is locked to this single project: header shows the
+  // project name and the filter dropdown is hidden. Used by the Projects view.
+  project?: Project | null;
+  // Shown as an "Add Images" header button when provided — selects this
+  // project in the generator so new renders file into it.
+  onAddImages?: () => void;
 }
 
 const variationBadge = (v: 'baseline' | 'tuned' | 'reimagined') =>
@@ -19,13 +25,13 @@ const variationBadge = (v: 'baseline' | 'tuned' | 'reimagined') =>
 const engineBadge = (e: 'openai' | 'gemini') =>
   e === 'openai' ? 'bg-emerald-500 text-white' : 'bg-blue-500 text-white';
 
-const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout, onMakeRevision }) => {
+const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout, onMakeRevision, project = null, onAddImages }) => {
   const [items, setItems] = useState<RenderHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<RenderHistoryItem | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [projectFilter, setProjectFilter] = useState<string>(''); // '' = all, 'none' = unfiled, else project id
+  const [projectFilter, setProjectFilter] = useState<string>(project?.id ?? ''); // '' = all, 'none' = unfiled, else project id
 
   const refresh = async (filter = projectFilter) => {
     setLoading(true);
@@ -81,31 +87,44 @@ const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout, onMakeRev
             <CaretLeft className="w-5 h-5" />
           </button>
           <div className="border-l border-zinc-300 pl-3 py-0.5">
-            <h1 className="text-sm font-bold tracking-tight text-zinc-950 uppercase leading-none mb-1">My History</h1>
-            <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest leading-none">{currentUser.email}</p>
+            <h1 className="text-sm font-bold tracking-tight text-zinc-950 uppercase leading-none mb-1">{project ? project.name : 'My History'}</h1>
+            <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest leading-none">{project ? `Project · ${currentUser.email}` : currentUser.email}</p>
           </div>
         </div>
-        <button onClick={onLogout} className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded transition-all">
-          Sign Out
-        </button>
+        <div className="flex items-center gap-2">
+          {onAddImages && (
+            <button
+              onClick={onAddImages}
+              className="px-3 py-1.5 bg-zinc-950 hover:bg-zinc-800 text-white text-[10px] font-bold tracking-widest uppercase rounded-lg transition-all"
+              title="Open the generator with this project selected — new renders file here"
+            >
+              + Add Images
+            </button>
+          )}
+          <button onClick={onLogout} className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded transition-all">
+            Sign Out
+          </button>
+        </div>
       </header>
 
       <main className="px-6 md:px-10 py-8 max-w-7xl mx-auto">
-        {/* Project filter */}
-        <div className="flex items-center gap-2 mb-6">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Project</label>
-          <select
-            value={projectFilter}
-            onChange={(e) => { setProjectFilter(e.target.value); refresh(e.target.value); }}
-            className="bg-white border border-zinc-200 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
-          >
-            <option value="">All renders</option>
-            <option value="none">Unfiled (no project)</option>
-            {projects.map(p => (
-              <option key={p.id} value={p.id}>{p.name} ({p.render_count})</option>
-            ))}
-          </select>
-        </div>
+        {/* Project filter (hidden when locked to a single project) */}
+        {!project && (
+          <div className="flex items-center gap-2 mb-6">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Project</label>
+            <select
+              value={projectFilter}
+              onChange={(e) => { setProjectFilter(e.target.value); refresh(e.target.value); }}
+              className="bg-white border border-zinc-200 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-950/10"
+            >
+              <option value="">All renders</option>
+              <option value="none">Unfiled (no project)</option>
+              {projects.map(p => (
+                <option key={p.id} value={p.id}>{p.name} ({p.render_count})</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {loading ? (
           <div className="flex items-center justify-center py-24">
@@ -118,8 +137,8 @@ const HistoryView: React.FC<Props> = ({ currentUser, onBack, onLogout, onMakeRev
           </div>
         ) : items.length === 0 ? (
           <div className="text-center py-24 text-zinc-500">
-            <p className="text-lg font-medium text-zinc-600 mb-2">No renders yet</p>
-            <p className="text-sm">Generate some variants from the main page — they'll show up here automatically.</p>
+            <p className="text-lg font-medium text-zinc-600 mb-2">{project ? 'No images in this project yet' : 'No renders yet'}</p>
+            <p className="text-sm">{project ? 'Hit "+ Add Images" above — the generator opens with this project selected, and every render files here.' : "Generate some variants from the main page — they'll show up here automatically."}</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">

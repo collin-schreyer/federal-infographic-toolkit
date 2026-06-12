@@ -13,6 +13,7 @@ import { api, type PublicUser, type Project, type RenderHistoryItem } from './li
 // focused on the generator itself.
 const HistoryView = React.lazy(() => import('./HistoryView'));
 const AdminView = React.lazy(() => import('./AdminView'));
+const ProjectsView = React.lazy(() => import('./ProjectsView'));
 const PreviewInWord = React.lazy(() => import('./PreviewInWord'));
 
 const ViewLoading = () => (
@@ -143,7 +144,9 @@ export default function App() {
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
-  const [view, setView] = useState<'generator' | 'history' | 'admin'>('generator');
+  const [view, setView] = useState<'generator' | 'history' | 'admin' | 'projects'>('generator');
+  // When set (and view === 'projects'), show that single project's gallery.
+  const [openProject, setOpenProject] = useState<Project | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [exampleModal, setExampleModal] = useState<{ label: string; src: string } | null>(null);
 
@@ -188,13 +191,14 @@ export default function App() {
 
   const isAuthenticated = !!currentUser;
 
-  // Load the user's projects once signed in.
+  // Load the user's projects on sign-in and refresh on view changes so the
+  // compose dropdown's image counts stay current after rendering.
   useEffect(() => {
     if (!currentUser) { setProjects([]); setSelectedProjectId(null); return; }
     api.get<{ projects: Project[] }>('/api/projects')
       .then(d => setProjects(d.projects))
       .catch(err => console.warn('[projects] load failed:', err));
-  }, [currentUser]);
+  }, [currentUser, view]);
 
   const handleCreateProject = async () => {
     const name = window.prompt('Project name (e.g. the solicitation number or pursuit name):')?.trim();
@@ -1107,6 +1111,40 @@ export default function App() {
     );
   }
 
+  if (view === 'projects' && currentUser && openProject) {
+    return (
+      <React.Suspense fallback={<ViewLoading />}>
+        <HistoryView
+          currentUser={currentUser}
+          project={openProject}
+          onBack={() => setOpenProject(null)}
+          onLogout={handleLogout}
+          onMakeRevision={handleMakeRevision}
+          onAddImages={() => {
+            setSelectedProjectId(openProject.id);
+            setOpenProject(null);
+            setView('generator');
+          }}
+        />
+      </React.Suspense>
+    );
+  }
+  if (view === 'projects' && currentUser) {
+    return (
+      <React.Suspense fallback={<ViewLoading />}>
+        <ProjectsView
+          currentUser={currentUser}
+          onBack={() => setView('generator')}
+          onLogout={handleLogout}
+          onOpenProject={(p) => setOpenProject(p)}
+          onAddImages={(p) => {
+            setSelectedProjectId(p.id);
+            setView('generator');
+          }}
+        />
+      </React.Suspense>
+    );
+  }
   if (view === 'history' && currentUser) {
     return (
       <React.Suspense fallback={<ViewLoading />}>
@@ -1150,6 +1188,14 @@ export default function App() {
                 title="Preview a graphic in a Word-page mockup"
               >
                 Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => { setOpenProject(null); setView('projects'); }}
+                className="px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 rounded transition-all"
+                title="Organize images by pursuit / solicitation"
+              >
+                Projects
               </button>
               <button
                 type="button"
