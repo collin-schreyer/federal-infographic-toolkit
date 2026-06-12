@@ -269,8 +269,16 @@ export default function App() {
 
 
   // Customization state
-  const [primaryColor, setPrimaryColor] = useState('#09090b');
-  const [accentColor, setAccentColor] = useState('#71717a');
+  // Black-and-white default — the safest baseline for any solicitation.
+  const [primaryColor, setPrimaryColor] = useState('#000000');
+  const [accentColor, setAccentColor] = useState('#FFFFFF');
+  // Which slot the next swatch click assigns to. Made explicit so picking
+  // colors is two predictable taps: arm a slot, then tap a color.
+  const [colorTarget, setColorTarget] = useState<'primary' | 'accent'>('primary');
+  const assignColor = (hex: string) => {
+    if (colorTarget === 'primary') setPrimaryColor(hex);
+    else setAccentColor(hex);
+  };
   const [selectedFont, setSelectedFont] = useState('Times New Roman');
   const [fontSize, setFontSize] = useState('12pt body text, 14–18pt headers');
   const [extractedPalette, setExtractedPalette] = useState<string[]>([]);
@@ -1639,25 +1647,78 @@ export default function App() {
 
                 {/* Color */}
                 <Drawer title="Color" icon={<Palette className="w-3.5 h-3.5 text-zinc-500" />}>
+                  {/* Slot selector: arm Primary or Secondary, then tap a swatch */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[12px] font-semibold text-zinc-800 tracking-wide flex items-center gap-2">
+                      <Palette className="w-3.5 h-3.5 text-zinc-500" /> Color Slots
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {([
+                        { slot: 'primary' as const, label: 'Primary', value: primaryColor, set: setPrimaryColor },
+                        { slot: 'accent' as const, label: 'Secondary', value: accentColor, set: setAccentColor },
+                      ]).map(({ slot, label, value, set }) => {
+                        const armed = colorTarget === slot;
+                        return (
+                          <div
+                            key={slot}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setColorTarget(slot)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') setColorTarget(slot); }}
+                            className={`relative flex items-center gap-2.5 p-2.5 rounded-xl border-2 cursor-pointer transition-all ${armed ? 'border-zinc-950 bg-zinc-50 ring-2 ring-zinc-950/15' : 'border-zinc-200 bg-white hover:border-zinc-300'}`}
+                          >
+                            <label
+                              className="relative w-9 h-9 rounded-lg border border-black/10 shadow-inner shrink-0 cursor-pointer overflow-hidden"
+                              style={{ backgroundColor: value }}
+                              title={`Pick a custom ${label.toLowerCase()} color`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="color"
+                                value={value}
+                                onChange={(e) => { set(e.target.value); setColorTarget(slot); }}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                              />
+                            </label>
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-[11px] font-bold text-zinc-900 leading-none mb-0.5">{label}</span>
+                              <span className="text-[10px] font-mono text-zinc-500 uppercase">{value}</span>
+                            </div>
+                            {armed && (
+                              <span className="absolute -top-1.5 -right-1.5 bg-zinc-950 text-white text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full shadow">selecting</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-zinc-500 leading-snug">
+                      Click <span className="font-semibold">Primary</span> or <span className="font-semibold">Secondary</span> to arm it, then tap any color below to assign. The small swatch opens a custom color wheel.
+                    </p>
+                  </div>
+
                   {/* Standard solicitation colors */}
                   <div className="flex flex-col gap-2.5">
                     <label className="text-[12px] font-semibold text-zinc-800 tracking-wide flex items-center gap-2">
-                      <Palette className="w-3.5 h-3.5 text-zinc-500" /> Standard Colors
+                      Standard Colors
                     </label>
-                    <p className="text-[10px] text-zinc-500 leading-snug -mt-1">The most commonly accepted colors in federal solicitations. Click to set Primary; click your Primary again to make it the Accent.</p>
+                    <p className="text-[10px] text-zinc-500 leading-snug -mt-1">The most commonly accepted colors in federal solicitations.</p>
                     <div className="grid grid-cols-5 gap-1.5">
                       {STANDARD_COLORS.map((c) => (
                         <div key={c.hex} className="flex flex-col items-center gap-1">
                           <button
                             type="button"
-                            title={`${c.name} ${c.hex}`}
-                            onClick={() => {
-                              if (primaryColor === c.hex) setAccentColor(c.hex);
-                              else setPrimaryColor(c.hex);
-                            }}
-                            className={`w-full aspect-square rounded-lg border-2 shadow-inner transition-transform hover:scale-105 ${primaryColor === c.hex ? 'border-zinc-950 ring-2 ring-zinc-950/20' : accentColor === c.hex ? 'border-zinc-500 border-dashed' : 'border-black/10'}`}
+                            title={`Set ${c.name} (${c.hex}) as ${colorTarget === 'primary' ? 'Primary' : 'Secondary'}`}
+                            onClick={() => assignColor(c.hex)}
+                            className="relative w-full aspect-square rounded-lg border border-black/10 shadow-inner transition-transform hover:scale-105"
                             style={{ backgroundColor: c.hex }}
-                          ></button>
+                          >
+                            {primaryColor.toLowerCase() === c.hex.toLowerCase() && (
+                              <span className="absolute -top-1 -left-1 w-4 h-4 rounded-full bg-zinc-950 text-white text-[8px] font-bold flex items-center justify-center shadow">1</span>
+                            )}
+                            {accentColor.toLowerCase() === c.hex.toLowerCase() && (
+                              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-zinc-500 text-white text-[8px] font-bold flex items-center justify-center shadow">2</span>
+                            )}
+                          </button>
                           <span className="text-[8px] font-medium text-zinc-500 text-center leading-[1.1]">{c.name}</span>
                         </div>
                       ))}
@@ -1694,50 +1755,23 @@ export default function App() {
                           <div key={idx} className="flex flex-col items-center gap-1.5 flex-1">
                             <button
                               type="button"
-                              title={`Click to set as Primary (Current: ${primaryColor === hex ? 'Primary' : accentColor === hex ? 'Accent' : 'Not Set'})`}
-                              onClick={() => {
-                                if (primaryColor === hex) setAccentColor(hex);
-                                else setPrimaryColor(hex);
-                              }}
-                              className={`w-full aspect-square rounded-lg border-2 shadow-inner transition-transform hover:scale-105 ${primaryColor === hex ? 'border-zinc-950 ring-2 ring-zinc-950/20' : accentColor === hex ? 'border-zinc-500 border-dashed' : 'border-black/5'}`}
+                              title={`Set ${hex} as ${colorTarget === 'primary' ? 'Primary' : 'Secondary'}`}
+                              onClick={() => assignColor(hex)}
+                              className="relative w-full aspect-square rounded-lg border border-black/10 shadow-inner transition-transform hover:scale-105"
                               style={{ backgroundColor: hex }}
-                            ></button>
+                            >
+                              {primaryColor.toLowerCase() === hex.toLowerCase() && (
+                                <span className="absolute -top-1 -left-1 w-4 h-4 rounded-full bg-zinc-950 text-white text-[8px] font-bold flex items-center justify-center shadow">1</span>
+                              )}
+                              {accentColor.toLowerCase() === hex.toLowerCase() && (
+                                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-zinc-500 text-white text-[8px] font-bold flex items-center justify-center shadow">2</span>
+                              )}
+                            </button>
                             <span className="text-[10px] font-mono text-zinc-500 uppercase">{hex}</span>
                           </div>
                         ))}
                       </div>
                     )}
-
-                    <div className="flex gap-3 mt-1">
-                      <div className="flex-1 flex flex-col gap-2">
-                        <span className="text-[11px] text-zinc-500 font-medium">Primary Accent</span>
-                        <label className="relative flex items-center h-11 w-full border border-zinc-200 rounded-xl overflow-hidden shadow-sm cursor-pointer hover:border-zinc-300 transition-colors">
-                          <input
-                            type="color"
-                            value={primaryColor}
-                            onChange={(e) => setPrimaryColor(e.target.value)}
-                            className="absolute -left-2 top-0 w-[200%] h-full cursor-pointer bg-transparent border-none p-0 focus:outline-none"
-                          />
-                          <div className="ml-auto mr-2.5 px-1.5 py-1 bg-white border border-zinc-200 rounded-md text-[11px] font-mono text-zinc-600 shadow-sm pointer-events-none uppercase">
-                            {primaryColor}
-                          </div>
-                        </label>
-                      </div>
-                      <div className="flex-1 flex flex-col gap-2">
-                        <span className="text-[11px] text-zinc-500 font-medium">Secondary Line</span>
-                        <label className="relative flex items-center h-11 w-full border border-zinc-200 rounded-xl overflow-hidden shadow-sm cursor-pointer hover:border-zinc-300 transition-colors">
-                          <input
-                            type="color"
-                            value={accentColor}
-                            onChange={(e) => setAccentColor(e.target.value)}
-                            className="absolute -left-2 top-0 w-[200%] h-full cursor-pointer bg-transparent border-none p-0 focus:outline-none"
-                          />
-                          <div className="ml-auto mr-2.5 px-1.5 py-1 bg-white border border-zinc-200 rounded-md text-[11px] font-mono text-zinc-600 shadow-sm pointer-events-none uppercase">
-                            {accentColor}
-                          </div>
-                        </label>
-                      </div>
-                    </div>
                   </div>
                 </Drawer>
 
