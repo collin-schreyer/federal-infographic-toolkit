@@ -323,6 +323,7 @@ export default function App() {
   const [headerLogo, setHeaderLogo] = useState<string | null>(null);
   const [density, setDensity] = useState<'minimal' | 'standard' | 'detailed'>('standard');
   const [flow, setFlow] = useState('Linear Phase Model');
+  const [flowCategory, setFlowCategory] = useState<'classic' | 'creative' | 'data'>('classic');
   const [orientation, setOrientation] = useState('11x8.5 Landscape');
   const [accessibility, setAccessibility] = useState('High Contrast Legibility Mode');
   const [iconography, setIconography] = useState('USWDS Standard Icons');
@@ -445,19 +446,55 @@ export default function App() {
     { label: 'Detailed', value: 'detailed', desc: 'Dense analytics' },
   ];
 
-  // Layout archetypes common in proposal graphics. Values stay in sync with
-  // FLOW_VALUES in server/src/lib/gpt5.ts so AI variants can pick them too.
-  const flows = [
-    { label: 'Linear Phase', value: 'Linear Phase Model', desc: 'Sequential steps' },
-    { label: 'Hierarchical', value: 'Hierarchical Network', desc: 'Top-down org' },
-    { label: 'Quadrant Matrix', value: 'Abstract Quadrant Matrix', desc: 'Relational grid' },
-    { label: 'Swimlane', value: 'Swimlane Process Lanes', desc: 'Roles × phases' },
-    { label: 'Timeline', value: 'Milestone Timeline', desc: 'Schedule / PoP' },
-    { label: 'Hub & Spoke', value: 'Hub-and-Spoke Model', desc: 'Central capability' },
-    { label: 'Current → Future', value: 'Current-to-Future State Split', desc: 'Before / after' },
-    { label: 'Cycle Loop', value: 'Continuous Cycle Loop', desc: 'Recurring process' },
-    { label: 'Building Blocks', value: 'Stacked Capability Blocks', desc: 'Layered stack' },
+  // Layout archetypes common in proposal graphics, grouped into three tiers.
+  // Values stay in sync with FLOW_VALUES in server/src/lib/gpt5.ts so AI
+  // variants can pick from the full vocabulary too.
+  const FLOW_CATEGORIES = [
+    {
+      key: 'classic' as const,
+      label: 'Classic',
+      hint: 'The safe defaults',
+      flows: [
+        { label: 'Linear Phase', value: 'Linear Phase Model', desc: 'Sequential steps' },
+        { label: 'Hierarchical', value: 'Hierarchical Network', desc: 'Top-down org' },
+        { label: 'Quadrant Matrix', value: 'Abstract Quadrant Matrix', desc: 'Relational grid' },
+        { label: 'Swimlane', value: 'Swimlane Process Lanes', desc: 'Roles × phases' },
+        { label: 'Timeline', value: 'Milestone Timeline', desc: 'Schedule / PoP' },
+        { label: 'Hub & Spoke', value: 'Hub-and-Spoke Model', desc: 'Central capability' },
+        { label: 'Current → Future', value: 'Current-to-Future State Split', desc: 'Before / after' },
+        { label: 'Cycle Loop', value: 'Continuous Cycle Loop', desc: 'Recurring process' },
+        { label: 'Building Blocks', value: 'Stacked Capability Blocks', desc: 'Layered stack' },
+      ],
+    },
+    {
+      key: 'creative' as const,
+      label: 'Creative',
+      hint: 'Memorable metaphors, still evaluator-safe',
+      flows: [
+        { label: 'Maturity Staircase', value: 'Maturity Staircase', desc: 'Steps to optimized' },
+        { label: 'Roadmap', value: 'Milestone Roadmap Highway', desc: 'Milestones on a road' },
+        { label: 'Bridge', value: 'Capability Bridge', desc: 'Span the gap' },
+        { label: 'Pyramid', value: 'Layered Pyramid', desc: 'Strategic → tactical' },
+        { label: 'Iceberg', value: 'Iceberg Model', desc: 'Depth beneath surface' },
+        { label: 'Funnel', value: 'Refinement Funnel', desc: 'Triage to outcomes' },
+        { label: 'Honeycomb', value: 'Honeycomb Capability Cluster', desc: 'Hex capability tiles' },
+        { label: 'Defense Rings', value: 'Defense-in-Depth Rings', desc: 'Layered protection' },
+        { label: 'Flywheel', value: 'Momentum Flywheel', desc: 'Compounding momentum' },
+      ],
+    },
+    {
+      key: 'data' as const,
+      label: 'Data-Forward',
+      hint: 'Analytic register',
+      flows: [
+        { label: 'Dashboard', value: 'Executive Dashboard Scorecard', desc: 'KPI tiles' },
+        { label: 'Heat-Map Matrix', value: 'Heat-Map Coverage Matrix', desc: 'Coverage intensity' },
+        { label: 'Decision Tree', value: 'Branching Decision Tree', desc: 'Branching logic' },
+        { label: 'Gantt Schedule', value: 'Gantt-Style Schedule Bars', desc: 'IMS-style bars' },
+      ],
+    },
   ];
+  const allFlows = FLOW_CATEGORIES.flatMap(c => c.flows);
 
   // Colors most commonly accepted in federal solicitations (USWDS-aligned
   // plus standard print-safe neutrals).
@@ -1877,8 +1914,26 @@ export default function App() {
                     <label className="text-[12px] font-semibold text-zinc-800 tracking-wide flex items-center gap-2">
                       <span className="w-3.5 h-3.5 border border-zinc-500 rounded-sm inline-flex"></span> Flow & Layout
                     </label>
+                    <div className="flex gap-1">
+                      {FLOW_CATEGORIES.map((cat) => (
+                        <button
+                          key={cat.key}
+                          type="button"
+                          onClick={() => setFlowCategory(cat.key)}
+                          title={cat.hint}
+                          className={`px-2.5 py-1 rounded-md text-[10px] font-bold tracking-wide transition-all ${flowCategory === cat.key ? 'bg-zinc-950 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'}`}
+                        >
+                          {cat.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-zinc-500 -mt-0.5">
+                      Selected: <span className="font-semibold text-zinc-800">{allFlows.find(f => f.value === flow)?.label ?? flow}</span>
+                      {flowCategory === 'creative' && ' · metaphor-driven layouts evaluators remember — still USWDS-clean, no clip-art'}
+                      {flowCategory === 'data' && ' · analytic layouts for coverage, schedule, and logic claims'}
+                    </p>
                     <div className="grid grid-cols-3 gap-1.5">
-                      {flows.map((f) => (
+                      {(FLOW_CATEGORIES.find(c => c.key === flowCategory)?.flows ?? []).map((f) => (
                         <label key={f.value} className={`relative flex flex-col items-center justify-center px-1.5 py-2 rounded-lg border cursor-pointer transition-all hover:bg-zinc-50 ${flow === f.value ? 'ring-2 ring-zinc-950/20 border-zinc-950 bg-zinc-50' : 'bg-white border-zinc-200'}`}>
                           <input
                             type="radio"

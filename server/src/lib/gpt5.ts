@@ -120,6 +120,7 @@ export interface VariantSettingsPair {
 }
 
 const FLOW_VALUES = [
+  // Classic
   'Linear Phase Model',
   'Hierarchical Network',
   'Abstract Quadrant Matrix',
@@ -129,6 +130,21 @@ const FLOW_VALUES = [
   'Current-to-Future State Split',
   'Continuous Cycle Loop',
   'Stacked Capability Blocks',
+  // Creative — memorable proposal metaphors, still federal-grade
+  'Maturity Staircase',
+  'Milestone Roadmap Highway',
+  'Capability Bridge',
+  'Layered Pyramid',
+  'Iceberg Model',
+  'Refinement Funnel',
+  'Honeycomb Capability Cluster',
+  'Defense-in-Depth Rings',
+  'Momentum Flywheel',
+  // Data-forward — analytic register
+  'Executive Dashboard Scorecard',
+  'Heat-Map Coverage Matrix',
+  'Branching Decision Tree',
+  'Gantt-Style Schedule Bars',
 ];
 const DENSITY_VALUES = ['minimal', 'standard', 'detailed'];
 const ICONOGRAPHY_VALUES = ['USWDS Standard Icons', 'Wireframe Lineart Elements', 'Solid Monochrome'];
