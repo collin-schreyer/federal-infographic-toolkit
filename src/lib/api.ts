@@ -11,7 +11,7 @@ export class ApiError extends Error {
   }
 }
 
-async function apiFetch<T>(
+async function doFetch<T>(
   method: string,
   path: string,
   body?: unknown,
@@ -41,13 +41,49 @@ async function apiFetch<T>(
     throw new ApiError(msg, res.status);
   }
   // Every api.* endpoint returns a JSON object. An empty body or an HTML/text
-  // payload with a 200 status means a proxy hiccup or a machine mid-restart —
-  // surface it as a retryable error instead of returning null and letting
-  // callers crash on destructuring.
+  // payload with a 200 status means something between the browser and the app
+  // (corporate proxy, VPN appliance, edge hiccup) dropped the response body.
   if (data === null || typeof data !== 'object') {
-    throw new ApiError(`The server returned an unexpected ${res.status} response — please retry.`, res.status);
+    throw new ApiError(
+      `The connection returned an incomplete response (HTTP ${res.status}). If this keeps happening, a corporate VPN or proxy may be interfering — try again, or retry off-VPN.`,
+      res.status,
+    );
   }
   return data as T;
+}
+
+// Generation endpoints must never auto-retry — a lost response doesn't mean
+// the render didn't happen, and re-firing would double-bill. (Lost renders
+// are still recoverable from History, since the server persists before
+// responding.) Everything else is safe to retry.
+const NO_RETRY_PATHS = ['/api/render', '/api/plan', '/api/summarize', '/api/suggest-prompt'];
+
+async function apiFetch<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  const retryable = !NO_RETRY_PATHS.some(p => path.startsWith(p));
+  const attempts = retryable ? 3 : 1;
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await doFetch<T>(method, path, body, signal);
+    } catch (e: any) {
+      lastErr = e;
+      if (e?.name === 'AbortError') throw e;
+      // Retry only transient failure classes: an incomplete 2xx body, gateway
+      // errors, or a network-layer TypeError. Real 4xx/5xx app errors
+      // (wrong password, forbidden, validation) propagate immediately.
+      const transient =
+        (e instanceof ApiError && ((e.status >= 200 && e.status < 300) || [502, 503, 504].includes(e.status))) ||
+        (e instanceof TypeError);
+      if (!retryable || !transient || i === attempts - 1) throw e;
+      await new Promise(r => setTimeout(r, 400 * (i + 1)));
+    }
+  }
+  throw lastErr;
 }
 
 export const api = {
