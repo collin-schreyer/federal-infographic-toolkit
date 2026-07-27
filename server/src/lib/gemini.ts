@@ -1,5 +1,5 @@
 import type { VariantOverrides } from './variant-overrides.js';
-import { fontDescriptor, backgroundClause, logoClause } from './variant-overrides.js';
+import { fontDescriptor, backgroundClause, logoClause, resolveLogoPosition } from './variant-overrides.js';
 
 const IMAGE_TIMEOUT_MS = 150_000;
 
@@ -30,6 +30,7 @@ export interface GeminiRenderInput {
   // The user-selected slide graphic (from a PPTX upload) used as the visual
   // starting point for the render.
   referenceImageBase64?: string | null;
+  logoPosition?: string | null;
   overrides?: VariantOverrides;
 }
 
@@ -40,7 +41,7 @@ export async function generateInfographicImage(input: GeminiRenderInput): Promis
   const {
     topic, colors, fontFamily, logoUrl, density, flow, orientation,
     accessibility, iconography, isTransparent, imageToReviseBase64,
-    revisionPrompt, contextText, referenceImageBase64, overrides,
+    revisionPrompt, contextText, referenceImageBase64, logoPosition, overrides,
   } = input;
 
   const contextBlock = contextText && contextText.trim()
@@ -49,7 +50,8 @@ export async function generateInfographicImage(input: GeminiRenderInput): Promis
 
   const effectiveColors = overrides?.palette?.length ? overrides.palette : colors;
   const effectiveFontDesc = fontDescriptor(overrides?.typography ?? fontFamily);
-  const includeLogo = !!logoUrl && overrides?.logoTreatment !== 'omit';
+  const resolvedLogoPosition = resolveLogoPosition(overrides?.logoTreatment, logoPosition);
+  const includeLogo = !!logoUrl && resolvedLogoPosition !== null;
   const bgClause = backgroundClause(overrides?.backgroundMode, isTransparent);
   const moodLine = overrides?.mood ? `\n- Overall mood: ${overrides.mood}.` : '';
   const registerLine = overrides?.styleRegister ? `\n- Visual register: in the style of a ${overrides.styleRegister}.` : '';
@@ -99,14 +101,13 @@ ${revisionPrompt && imageToReviseBase64 ? `\nCRITICAL REVISION INSTRUCTION:\nThe
 Do NOT generate any text explanation. ONLY output the high-fidelity image composition.`;
 
   // Slide reference: attach the user's selected slide graphic as the visual
-  // starting point. The logo is NOT attached anymore — it gets composited
-  // server-side after rendering (see composite.ts); the model just reserves
-  // a clean corner via logoClause.
+  // starting point. The logo (when present) is also attached, governed by the
+  // strict reproduction contract in logoClause.
   if (referenceImageBase64) {
     prompt += `\n\nREFERENCE GRAPHIC: The attached image is an existing slide graphic the user selected as the visual starting point. Treat it as the base composition — preserve its core structure, content, and intent — and apply the subject instructions above as the changes to make. Re-set it cleanly in the requested style (palette, typography, iconography); evolve it, do not copy it pixel-for-pixel.`;
   }
-  if (includeLogo && logoUrl) {
-    prompt += logoClause(overrides?.logoTreatment, true);
+  if (includeLogo && resolvedLogoPosition) {
+    prompt += logoClause(resolvedLogoPosition);
   }
 
   const requestParts: any[] = [{ text: prompt }];
@@ -120,6 +121,13 @@ Do NOT generate any text explanation. ONLY output the high-fidelity image compos
 
   if (referenceImageBase64) {
     const [header, base64Data] = referenceImageBase64.split(',');
+    const mimeMatch = header.match(/:([^;]+);/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+    requestParts.push({ inlineData: { mimeType, data: base64Data } });
+  }
+
+  if (includeLogo && logoUrl) {
+    const [header, base64Data] = logoUrl.split(',');
     const mimeMatch = header.match(/:([^;]+);/);
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
     requestParts.push({ inlineData: { mimeType, data: base64Data } });

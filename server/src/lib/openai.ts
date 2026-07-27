@@ -1,5 +1,5 @@
 import type { VariantOverrides } from './variant-overrides.js';
-import { fontDescriptor, backgroundClause, logoClause } from './variant-overrides.js';
+import { fontDescriptor, backgroundClause, logoClause, resolveLogoPosition } from './variant-overrides.js';
 
 const OPENAI_IMAGE_MODEL = 'gpt-image-2';
 
@@ -62,6 +62,9 @@ export interface OpenAIRenderInput {
   // The user-selected slide graphic (from a PPTX upload) used as the visual
   // starting point for the render.
   referenceImageBase64?: string | null;
+  // Where the logo goes: top-left (default) | top-center | top-right |
+  // bottom-left | bottom-right. AI variants may override via logoTreatment.
+  logoPosition?: string | null;
   overrides?: VariantOverrides;
 }
 
@@ -72,7 +75,7 @@ export async function generateInfographicImage(input: OpenAIRenderInput): Promis
   const {
     topic, colors, fontFamily, logoUrl, density, flow, orientation,
     accessibility, iconography, isTransparent, imageToReviseBase64,
-    revisionPrompt, contextText, referenceImageBase64, overrides,
+    revisionPrompt, contextText, referenceImageBase64, logoPosition, overrides,
   } = input;
 
   const contextBlock = contextText && contextText.trim()
@@ -81,7 +84,8 @@ export async function generateInfographicImage(input: OpenAIRenderInput): Promis
 
   const effectiveColors = overrides?.palette?.length ? overrides.palette : colors;
   const effectiveFontDesc = fontDescriptor(overrides?.typography ?? fontFamily);
-  const includeLogo = !!logoUrl && overrides?.logoTreatment !== 'omit';
+  const resolvedLogoPosition = resolveLogoPosition(overrides?.logoTreatment, logoPosition);
+  const includeLogo = !!logoUrl && resolvedLogoPosition !== null;
   const bgClause = backgroundClause(overrides?.backgroundMode, isTransparent);
   const moodLine = overrides?.mood ? `\n- Overall mood: ${overrides.mood}.` : '';
   const registerLine = overrides?.styleRegister ? `\n- Visual register: in the style of a ${overrides.styleRegister}.` : '';
@@ -128,13 +132,13 @@ ABSOLUTE PROHIBITIONS (never include any of these):
 ${requirementsBlock}
 ${revisionPrompt && imageToReviseBase64 ? `\nCRITICAL REVISION INSTRUCTION:\nThe user has requested an explicit revision to the attached current rendering. REVISION REQUEST: "${revisionPrompt}". You MUST output a new high-fidelity image that strictly incorporates this revision while perfectly maintaining the previously established structural compliance, typography, and palette restrictions.` : ''}
 ${referenceImageBase64 ? `\nREFERENCE GRAPHIC: One of the attached images is an existing slide graphic the user selected as the visual starting point. Treat it as the base composition — preserve its core structure, content, and intent — and apply the subject instructions above as the changes to make. Re-set it cleanly in the requested style (palette, typography, iconography); evolve it, do not copy it pixel-for-pixel.` : ''}
-${includeLogo ? logoClause(overrides?.logoTreatment, true) : ''}
+${includeLogo && resolvedLogoPosition ? logoClause(resolvedLogoPosition) : ''}
 Output ONLY the high-fidelity image composition. No surrounding text.`;
 
   const size = orientationToSize(orientation);
-  // Logo is intentionally NOT an input image anymore — it gets composited
-  // server-side after rendering (see composite.ts).
-  const hasInputImage = !!(imageToReviseBase64 || referenceImageBase64);
+  // The logo rides along as a reference input so the model can reproduce it
+  // exactly (see the strict logoClause above).
+  const hasInputImage = !!(imageToReviseBase64 || referenceImageBase64 || includeLogo);
 
   if (hasInputImage) {
     const form = new FormData();
@@ -149,6 +153,9 @@ Output ONLY the high-fidelity image composition. No surrounding text.`;
     }
     if (referenceImageBase64) {
       form.append('image[]', dataUrlToBlob(referenceImageBase64), 'reference-slide.png');
+    }
+    if (includeLogo && logoUrl) {
+      form.append('image[]', dataUrlToBlob(logoUrl), 'logo.png');
     }
 
     let response: Response;

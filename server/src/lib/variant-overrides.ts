@@ -41,18 +41,32 @@ export const backgroundClause = (mode: BackgroundMode | undefined, isTransparent
   return 'Ensure a solid professional light background color.';
 };
 
-// The logo itself is no longer sent to the image models — models redraw
-// reference images, which warps logo detail. Instead the model reserves a
-// clean corner and the server composites the user's actual logo file onto
-// the finished render (see composite.ts). Pixel-perfect by construction.
-export const logoClause = (
+export type LogoPosition = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-right';
+
+// Resolve where the logo goes for a given render. The AI variant plan can
+// force bottom-right (its "footer-corner" editorial register) or omit the
+// logo entirely; otherwise the user's chosen position wins.
+export const resolveLogoPosition = (
   treatment: LogoTreatment | undefined,
-  hasLogo: boolean,
-): string => {
-  if (!hasLogo) return '';
-  if (treatment === 'omit') return '';
-  if (treatment === 'footer-corner') {
-    return `\n\nLOGO SPACE: Reserve a clean, completely empty rectangular area in the BOTTOM-RIGHT corner of the composition (roughly 18% of the canvas width and 12% of its height, with a comfortable margin from the edges). Do not place any text, icons, borders, or graphics in that area — the organization's official logo will be placed there after rendering.`;
-  }
-  return `\n\nLOGO SPACE: Reserve a clean, completely empty rectangular area in the TOP-LEFT corner of the composition (roughly 18% of the canvas width and 12% of its height, with a comfortable margin from the edges). Do not place any text, icons, borders, or graphics in that area — the organization's official logo will be placed there after rendering.`;
+  userPosition: string | null | undefined,
+): LogoPosition | null => {
+  if (treatment === 'omit') return null;
+  if (treatment === 'footer-corner') return 'bottom-right';
+  const p = (userPosition || 'top-left') as LogoPosition;
+  return (['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-right'] as string[]).includes(p)
+    ? p
+    : 'top-left';
+};
+
+// The logo is attached to the model as a reference image with a STRICT
+// reproduction contract: identical mark, no boxes/frames/outlines around it,
+// color re-tint is the only permitted adaptation. (The earlier "reserve an
+// empty rectangle" approach made models literally draw outlined boxes.)
+export const logoClause = (position: LogoPosition): string => {
+  const posText = position.replace('-', ' ');
+  return `\n\nLOGO — STRICT REQUIREMENTS:
+- One of the attached images is the organization's official logo. Place this exact logo in the ${posText} area of the composition.
+- Reproduce the logo mark and any letterforms EXACTLY as provided: identical shapes, proportions, spacing, and details. Do not redesign, simplify, distort, or restyle it in any way.
+- Do NOT draw any box, outline, frame, border, placeholder, panel, or background shape around or behind the logo. Absolutely no rectangular container of any kind — the logo sits directly on clean, open background space with a comfortable margin around it.
+- The ONLY permitted adaptation is color: you may re-tint the logo (for example to the primary palette color, or to white for contrast on a dark background) so it harmonizes with the design — while keeping every shape identical to the reference.`;
 };

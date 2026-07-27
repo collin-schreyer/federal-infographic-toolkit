@@ -6,7 +6,6 @@ import { requireAuth } from '../auth.js';
 import { db, UPLOADS_DIR, type PublicUser } from '../db.js';
 import { generateInfographicImage as generateOpenAI } from '../lib/openai.js';
 import { generateInfographicImage as generateGemini } from '../lib/gemini.js';
-import { compositeLogo } from '../lib/composite.js';
 import { projectRole } from './projects.js';
 import type { VariantOverrides } from '../lib/variant-overrides.js';
 
@@ -28,6 +27,7 @@ interface RenderBody {
   revisionPrompt: string | null;
   contextText: string | null;
   referenceImageBase64?: string | null;
+  logoPosition?: string | null;
   overrides?: VariantOverrides;
   // Optional metadata for history persistence
   variation?: 'baseline' | 'tuned' | 'reimagined';
@@ -78,6 +78,7 @@ function persistRender(
       accessibility: body.accessibility,
       iconography: body.iconography,
       isTransparent: body.isTransparent,
+      logoPosition: body.logoPosition ?? null,
       overrides: body.overrides,
     }),
     body.sourceName || null,
@@ -103,26 +104,9 @@ render.post('/render', requireAuth, async (c) => {
   }
 
   try {
-    let dataUrl = body.engine === 'openai'
+    const dataUrl = body.engine === 'openai'
       ? await generateOpenAI(body)
       : await generateGemini(body);
-
-    // Pixel-perfect logo: the model reserved a clean corner; now stamp the
-    // user's actual logo file onto the render. The logo is never redrawn by
-    // a model — it's the user's own pixels. Compositing failure must never
-    // fail the render itself.
-    const treatment = body.overrides?.logoTreatment ?? 'top-left';
-    if (body.logoUrl && treatment !== 'omit') {
-      try {
-        dataUrl = await compositeLogo(
-          dataUrl,
-          body.logoUrl,
-          treatment === 'footer-corner' ? 'footer-corner' : 'top-left',
-        );
-      } catch (e) {
-        console.warn('[render] logo compositing failed; returning render without composite:', e);
-      }
-    }
 
     // Only persist initial renders, not revisions. A revision REPLACES an
     // existing render in the UI, so the history row stays attached to the

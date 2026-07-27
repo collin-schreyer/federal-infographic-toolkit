@@ -271,6 +271,7 @@ export default function App() {
     if (s.accessibility) setAccessibility(s.accessibility);
     if (s.iconography) setIconography(s.iconography);
     if (typeof s.isTransparent === 'boolean') setIsTransparent(s.isTransparent);
+    if (typeof s.logoPosition === 'string') setLogoPosition(s.logoPosition);
     if (item.project_id) setSelectedProjectId(item.project_id);
     setReviseImage(null);
     setOpenProject(null);
@@ -321,6 +322,7 @@ export default function App() {
   const [fontSize, setFontSize] = useState('12pt body text, 14–18pt headers');
   const [extractedPalette, setExtractedPalette] = useState<string[]>([]);
   const [headerLogo, setHeaderLogo] = useState<string | null>(null);
+  const [logoPosition, setLogoPosition] = useState('top-left');
   const [density, setDensity] = useState<'minimal' | 'standard' | 'detailed'>('standard');
   const [flow, setFlow] = useState('Linear Phase Model');
   const [flowCategory, setFlowCategory] = useState<'classic' | 'creative' | 'data'>('classic');
@@ -896,6 +898,7 @@ export default function App() {
           // already embodies it; attaching both would muddle the edit.
           referenceImageBase64: null,
           projectId: selectedProjectId,
+          logoPosition,
         }
       );
 
@@ -961,6 +964,7 @@ export default function App() {
         sourceName: sourceName || undefined,
         referenceImageBase64: reviseImage?.dataUrl ?? selectedSlide?.thumbnailDataUrl ?? null,
         projectId: selectedProjectId,
+        logoPosition,
       },
       signal
     ).then(url => {
@@ -1055,6 +1059,7 @@ export default function App() {
           // over a selected slide's graphic.
           referenceImageBase64: reviseImage?.dataUrl ?? selectedSlide?.thumbnailDataUrl ?? null,
           projectId: selectedProjectId,
+          logoPosition,
         },
         signal
       ).then(url => {
@@ -1733,11 +1738,36 @@ export default function App() {
                           <UploadSimple className="w-4 h-4 text-zinc-500" />
                         </div>
                         <span className="text-sm font-medium text-zinc-600">Upload Header Logo</span>
-                        <span className="text-[11px] text-zinc-400 mt-0.5 text-center leading-tight">Injected into top-left of render.</span>
+                        <span className="text-[11px] text-zinc-400 mt-0.5 text-center leading-tight">Rendered exactly as-is, at the position you pick below.</span>
                       </div>
                     ) : (
                       <div className="w-full border border-zinc-200 rounded-xl p-4 flex items-center justify-center bg-zinc-50/50 relative overflow-hidden h-[120px] group shadow-inner">
                         <img src={headerLogo} alt="Uploaded Logo" className="max-h-full max-w-full object-contain mix-blend-multiply" />
+                      </div>
+                    )}
+
+                    {headerLogo && (
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">Logo Position</span>
+                        <div className="grid grid-cols-5 gap-1">
+                          {([
+                            { value: 'top-left', label: 'Top Left' },
+                            { value: 'top-center', label: 'Top Center' },
+                            { value: 'top-right', label: 'Top Right' },
+                            { value: 'bottom-left', label: 'Btm Left' },
+                            { value: 'bottom-right', label: 'Btm Right' },
+                          ]).map(pos => (
+                            <button
+                              key={pos.value}
+                              type="button"
+                              onClick={() => setLogoPosition(pos.value)}
+                              className={`px-1 py-1.5 rounded-md text-[9px] font-bold tracking-tight transition-all ${logoPosition === pos.value ? 'bg-zinc-950 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'}`}
+                            >
+                              {pos.label}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-[10px] text-zinc-500 leading-snug">The logo is reproduced exactly as uploaded — no boxes or frames around it. Its color may adapt to match the palette. AI variants may occasionally move it or omit it when their layout demands.</p>
                       </div>
                     )}
                   </div>
