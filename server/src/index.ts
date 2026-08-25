@@ -11,6 +11,7 @@ import aiRoutes from './routes/ai.js';
 import historyRoutes from './routes/history.js';
 import userRoutes from './routes/users.js';
 import projectRoutes from './routes/projects.js';
+import { migrationNoticeEnabled, migrationNoticeHtml } from './migration-notice.js';
 import { readFileSync } from 'fs';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
@@ -38,6 +39,20 @@ app.use('/api/*', attachUser);
 app.get('/api/health', (c) =>
   c.json({ ok: true, time: new Date().toISOString() })
 );
+
+// Sunset mode (Fly only, via MIGRATED_NOTICE=1): the deployment stops serving
+// the app and explains where it went. Health stays live above so monitoring
+// still works. Unset the variable to bring it back instantly.
+if (migrationNoticeEnabled()) {
+  const noticeHtml = migrationNoticeHtml();
+  app.all('/api/*', (c) =>
+    c.json(
+      { error: 'This deployment has been retired. The Federal Infographic Toolkit has moved to AWS — contact Collin Schreyer for the new address.' },
+      410,
+    ),
+  );
+  app.get('*', (c) => c.html(noticeHtml, 410));
+}
 
 app.route('/api/auth', authRoutes);
 app.route('/api', renderRoutes);

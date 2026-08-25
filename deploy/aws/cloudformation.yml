@@ -108,6 +108,13 @@ Resources:
                 Condition:
                   StringEquals:
                     kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+              # Read-only access to the migration staging bucket so the host
+              # can pull a Fly snapshot during migrate-from-fly.sh.
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource:
+                  - !Sub arn:aws:s3:::fit-migration-${AWS::AccountId}
+                  - !Sub arn:aws:s3:::fit-migration-${AWS::AccountId}/*
 
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -168,11 +175,20 @@ Resources:
           dnf update -y
           dnf install -y docker git
 
-          # Docker Compose v2 plugin (ARM build)
+          # Docker CLI plugins (ARM). AL2023 ships neither compose v2 nor
+          # buildx, and compose >= 2.30 refuses to build without buildx.
+          # Versions are resolved from the 'latest' redirect because the
+          # release asset filenames embed the version number.
           mkdir -p /usr/libexec/docker/cli-plugins
           curl -sSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64 \
             -o /usr/libexec/docker/cli-plugins/docker-compose
           chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+
+          BX=$(curl -sSI https://github.com/docker/buildx/releases/latest \
+            | grep -i '^location:' | sed -E 's@.*/tag/(v[0-9.]+).*@\1@' | tr -d '\r')
+          curl -sSL "https://github.com/docker/buildx/releases/download/${!BX}/buildx-${!BX}.linux-arm64" \
+            -o /usr/libexec/docker/cli-plugins/docker-buildx
+          chmod +x /usr/libexec/docker/cli-plugins/docker-buildx
 
           systemctl enable --now docker
 
