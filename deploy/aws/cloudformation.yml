@@ -1,0 +1,247 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Federal Infographic Toolkit — single-instance deployment.
+  EC2 (ARM) running the app in Docker behind Caddy for automatic HTTPS, with a
+  separate EBS data volume that survives instance replacement (holds the SQLite
+  database and all generated images). Secrets live in SSM Parameter Store, and
+  shell access is via SSM Session Manager — no SSH keys, no open SSH port.
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues: [t4g.micro, t4g.small, t4g.medium]
+    Description: >
+      t4g.small (2 GB, ~$12/mo) is the recommended default — the app needs ~1 GB
+      and Docker builds need headroom. t4g.micro (1 GB, ~$6/mo) works but builds
+      are slow and concurrent renders may hit swap.
+
+  DataVolumeSizeGb:
+    Type: Number
+    Default: 20
+    MinValue: 8
+    MaxValue: 200
+    Description: Size of the persistent /data volume (SQLite + generated images). ~$0.08/GB/mo.
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Amazon Linux 2023 ARM64 (resolved automatically — do not change).
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to deploy into (the account's default VPC is fine).
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: A PUBLIC subnet in the VPC above.
+
+  GitRepoUrl:
+    Type: String
+    Default: git@github.com:collin-schreyer/federal-infographic-toolkit-v2.git
+    Description: SSH clone URL. The instance authenticates with the deploy key in SSM.
+
+Resources:
+
+  # ---------- Networking ----------
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      # EC2 rejects non-ASCII in this field, so keep it plain.
+      GroupDescription: FIT web tier - HTTP/HTTPS in, everything out. No SSH (use SSM).
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP (Caddy redirects to HTTPS and serves ACME challenges)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS
+      Tags:
+        - Key: Name
+          Value: fit-web-sg
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: fit-eip
+
+  EipAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      InstanceId: !Ref Instance
+
+  # ---------- Identity ----------
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Enables Session Manager shell access without SSH keys or open ports.
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: read-app-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath]
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/fit/*
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  # ---------- Storage ----------
+
+  # Deliberately a SEPARATE volume from the root disk: the instance can be
+  # replaced, resized, or rebuilt and the database + every generated image
+  # survive. Same role the Fly volume played.
+  DataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !GetAtt Instance.AvailabilityZone
+      Size: !Ref DataVolumeSizeGb
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: fit-data
+
+  DataVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref Instance
+      VolumeId: !Ref DataVolume
+      Device: /dev/sdf
+
+  # ---------- Compute ----------
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds: [!Ref SecurityGroup]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: fit-app
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          exec > >(tee /var/log/fit-bootstrap.log|logger -t fit -s 2>/dev/console) 2>&1
+
+          dnf update -y
+          dnf install -y docker git
+
+          # Docker Compose v2 plugin (ARM build)
+          mkdir -p /usr/libexec/docker/cli-plugins
+          curl -sSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64 \
+            -o /usr/libexec/docker/cli-plugins/docker-compose
+          chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+
+          systemctl enable --now docker
+
+          # 2 GB swap so npm/vite builds never OOM on the smaller instance types
+          if [ ! -f /swapfile ]; then
+            dd if=/dev/zero of=/swapfile bs=1M count=2048
+            chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+            echo '/swapfile none swap sw 0 0' >> /etc/fstab
+          fi
+
+          # ---- Mount the persistent data volume at /data ----
+          # Wait for the EBS attachment to appear, then pick the disk that has
+          # no partitions and no mountpoint (i.e. not the root disk).
+          for i in $(seq 1 60); do
+            DEV=$(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}' | while read -r d; do
+              parts=$(lsblk -no NAME "$d" | wc -l)
+              mp=$(lsblk -no MOUNTPOINT "$d" | tr -d ' \n')
+              if [ "$parts" -eq 1 ] && [ -z "$mp" ]; then echo "$d"; break; fi
+            done)
+            [ -n "$DEV" ] && break
+            sleep 5
+          done
+
+          mkdir -p /data
+          if [ -n "$DEV" ]; then
+            # Format only if the volume is blank — never clobber existing data.
+            if ! blkid "$DEV"; then mkfs -t xfs "$DEV"; fi
+            UUID=$(blkid -s UUID -o value "$DEV")
+            grep -q "$UUID" /etc/fstab || echo "UUID=$UUID /data xfs defaults,nofail 0 2" >> /etc/fstab
+            mount -a
+          fi
+          mkdir -p /data/uploads
+
+          # ---- Fetch the GitHub deploy key from SSM ----
+          mkdir -p /root/.ssh && chmod 700 /root/.ssh
+          aws ssm get-parameter --name /fit/github-deploy-key --with-decryption \
+            --region ${AWS::Region} --query Parameter.Value --output text > /root/.ssh/id_ed25519
+          chmod 600 /root/.ssh/id_ed25519
+          ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null
+
+          # ---- Clone and launch ----
+          if [ ! -d /opt/fit/.git ]; then
+            git clone ${GitRepoUrl} /opt/fit
+          fi
+          cd /opt/fit
+
+          /opt/fit/deploy/aws/render-env.sh ${AWS::Region}
+          docker compose -f deploy/aws/docker-compose.yml up -d --build
+
+          echo "fit bootstrap complete"
+
+Outputs:
+  PublicIp:
+    Description: Stable public IP (Elastic IP).
+    Value: !Ref ElasticIp
+
+  AppUrl:
+    Description: >
+      HTTPS URL. sslip.io resolves <dashed-ip>.sslip.io to that IP, which lets
+      Caddy obtain a real Let's Encrypt certificate without owning a domain.
+      Point a real domain here whenever you want — see AWS-DEPLOY.md.
+    Value: !Sub
+      - https://${DashedIp}.sslip.io
+      - DashedIp: !Join ['-', !Split ['.', !Ref ElasticIp]]
+
+  InstanceId:
+    Description: Use with `aws ssm start-session --target <id>` for a shell.
+    Value: !Ref Instance
+
+  DataVolumeId:
+    Description: Persistent data volume (snapshotted on stack delete).
+    Value: !Ref DataVolume

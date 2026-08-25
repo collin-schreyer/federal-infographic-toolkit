@@ -1,0 +1,49 @@
+# Runs on the EC2 host. Two containers:
+#   caddy — terminates TLS (automatic Let's Encrypt certs) and proxies to app
+#   app   — the toolkit itself, identical image to the Fly deployment
+#
+# Both the SQLite database and every generated image live on the host's /data
+# mount (a separate EBS volume), so `docker compose down` / instance rebuild
+# never loses user data.
+
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: /opt/fit/.env
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      DB_PATH: /data/app.db
+      DATA_DIR: /data
+      PUBLIC_DIR: /app/public
+    volumes:
+      - /data:/data
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file: /opt/fit/.env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

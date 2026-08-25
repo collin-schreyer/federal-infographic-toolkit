@@ -1,0 +1,32 @@
+# APP_HOSTNAME is written into /opt/fit/.env at boot by render-env.sh.
+# By default it's <dashed-elastic-ip>.sslip.io, which resolves to this server
+# and lets Caddy get a real Let's Encrypt certificate without owning a domain.
+#
+# To use a real domain instead: point an A record at the Elastic IP, then set
+#   aws ssm put-parameter --name /fit/app-hostname --value tools.bna-inc.com --type String --overwrite
+# and redeploy. Caddy will obtain a cert for it automatically on restart.
+
+{$APP_HOSTNAME} {
+	encode zstd gzip
+
+	# Renders move multi-megabyte base64 payloads; the default 100s write
+	# timeout would cut off a slow gpt-image-2 call mid-flight.
+	reverse_proxy app:8080 {
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+			dial_timeout 10s
+		}
+	}
+
+	request_body {
+		max_size 40MB
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10MB
+			roll_keep 5
+		}
+	}
+}
