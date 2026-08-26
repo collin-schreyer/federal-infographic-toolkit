@@ -19,8 +19,16 @@ stack **`fit-prod`**.
 From a checkout of `main`, with AWS credentials configured:
 
 ```bash
-./deploy/aws/deploy.sh
+./deploy/aws/deploy.sh      # macOS / Linux
 ```
+```powershell
+.\deploy\aws\deploy.ps1     # Windows
+```
+
+Every operational script ships in both flavours and does the same work. On
+Windows use the `.ps1` versions: the `.sh` ones run under Git Bash but need
+`MSYS_NO_PATHCONV=1`, or Git Bash rewrites the Linux paths embedded in the SSM
+commands and the deploy fails in a confusing way.
 
 That pulls `main` onto the server, refreshes secrets, rebuilds the container,
 restarts, and health-checks the live site. Takes 2–4 minutes. There is no
@@ -32,8 +40,16 @@ Other day-to-day commands:
 ./deploy/aws/logs.sh              # last 100 lines of app logs
 ./deploy/aws/logs.sh caddy        # web/TLS layer instead
 ./deploy/aws/logs.sh app 500      # more lines
+```
+```powershell
+.\deploy\aws\logs.ps1            # same, on Windows
+.\deploy\aws\logs.ps1 caddy
+.\deploy\aws\logs.ps1 app 500
+```
 
-aws ssm start-session --target i-0f66cbf26dd97a634 --region us-east-1   # shell
+Shell on the instance (either platform; needs the Session Manager plugin):
+```
+aws ssm start-session --target i-0f66cbf26dd97a634 --region us-east-1
 ```
 
 ---

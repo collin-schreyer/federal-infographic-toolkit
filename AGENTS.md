@@ -60,16 +60,25 @@ Two separate npm projects: run `npm install` in the root **and** in `server/`.
 ## Deploying
 
 ```bash
-./deploy/aws/deploy.sh
+./deploy/aws/deploy.sh      # macOS / Linux
+```
+```powershell
+.\deploy\aws\deploy.ps1     # Windows
 ```
 
 Pulls `main` onto the EC2 host over SSM, rebuilds, restarts, health-checks.
 Requires AWS credentials for `us-east-1`; needs no SSH key and no local Docker.
 
+**Pick the script that matches the operator's platform.** Both exist and are
+kept in sync; if you change one, change the other. On Windows prefer `.ps1` —
+the `.sh` versions work in Git Bash only with `MSYS_NO_PATHCONV=1`, because Git
+Bash otherwise rewrites the Linux paths inside the SSM command payload.
+
 **Deploy only what is committed and pushed to `main`** — the server builds from
 GitHub, so uncommitted local changes will not appear. Push first, then deploy.
 
-Logs: `./deploy/aws/logs.sh` (add `caddy` for the TLS layer).
+Logs: `./deploy/aws/logs.sh` or `.\deploy\aws\logs.ps1` (add `caddy` for the
+TLS layer).
 Shell: `aws ssm start-session --target i-0f66cbf26dd97a634 --region us-east-1`.
 
 ## Verifying a change reached production
