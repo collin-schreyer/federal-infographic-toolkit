@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { CircleNotch, CaretLeft, Trash, Plus, Copy, WarningCircle, ArrowsClockwise, ChartBar, DownloadSimple } from '@phosphor-icons/react';
+import { CircleNotch, CaretLeft, Trash, Plus, Copy, WarningCircle, ArrowsClockwise, ChartBar, DownloadSimple, GridFour, Users } from '@phosphor-icons/react';
 import { api, type PublicUser } from './lib/api';
+import AdminGallery from './AdminGallery';
 
 interface UsageRow {
   id: string;
@@ -36,6 +37,7 @@ interface Props {
 }
 
 const AdminView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
+  const [tab, setTab] = useState<'manage' | 'gallery'>('manage');
   const [users, setUsers] = useState<PublicUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -166,7 +168,7 @@ const AdminView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
             <CaretLeft className="w-5 h-5" />
           </button>
           <div className="border-l border-zinc-300 pl-3 py-0.5">
-            <h1 className="text-sm font-bold tracking-tight text-zinc-950 uppercase leading-none mb-1">User Management</h1>
+            <h1 className="text-sm font-bold tracking-tight text-zinc-950 uppercase leading-none mb-1">{tab === 'gallery' ? 'All Renders' : 'User Management'}</h1>
             <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest leading-none">Admin · {currentUser.email}</p>
           </div>
         </div>
@@ -175,7 +177,28 @@ const AdminView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
         </button>
       </header>
 
-      <main className="px-6 md:px-10 py-8 max-w-5xl mx-auto flex flex-col gap-8">
+      <main className={`px-6 md:px-10 py-8 mx-auto flex flex-col gap-8 ${tab === 'gallery' ? 'max-w-[1600px]' : 'max-w-5xl'}`}>
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 border-b border-zinc-200 -mb-2">
+          {([
+            { id: 'manage' as const, label: 'Users & Usage', Icon: Users },
+            { id: 'gallery' as const, label: 'All Renders', Icon: GridFour },
+          ]).map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className={`px-3 py-2 text-[11px] font-bold uppercase tracking-widest border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${
+                tab === id
+                  ? 'border-zinc-950 text-zinc-950'
+                  : 'border-transparent text-zinc-400 hover:text-zinc-700'
+              }`}
+            >
+              <Icon weight={tab === id ? 'fill' : 'regular'} className="w-3.5 h-3.5" /> {label}
+            </button>
+          ))}
+        </div>
+
         {error && (
           <div className="px-4 py-3 border border-red-200 bg-red-50 rounded-lg flex items-center gap-2">
             <WarningCircle weight="fill" className="w-4 h-4 text-red-600 shrink-0" />
@@ -183,6 +206,7 @@ const AdminView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
           </div>
         )}
 
+        {tab === 'manage' && (<>
         {/* Create user */}
         <section className="bg-white border border-zinc-200 rounded-xl p-5">
           <h2 className="text-[11px] font-bold tracking-widest uppercase text-zinc-900 mb-4 flex items-center gap-2">
@@ -371,6 +395,9 @@ const AdminView: React.FC<Props> = ({ currentUser, onBack, onLogout }) => {
             Est. spend assumes $0.04 per rendered variant (rough average across gpt-image-2 and nano-banana). Excludes GPT-5 planning (only when Tuned/Reimagined are enabled) and context-summary calls. For exact billing, check your OpenAI and Google Cloud dashboards.
           </div>
         </section>
+        </>)}
+
+        {tab === 'gallery' && <AdminGallery users={users} />}
       </main>
     </div>
   );

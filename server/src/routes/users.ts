@@ -94,6 +94,76 @@ users.get('/admin/usage', requireAdmin, (c) => {
   return c.json({ usage, totals, cost_per_render_usd: COST_PER_RENDER_USD });
 });
 
+// Admin-wide gallery: every render from every user, newest first.
+// Deliberately a separate route rather than a flag on /renders — that endpoint
+// is always self-scoped, and cross-user reads should be an explicit, clearly
+// admin-gated surface rather than a query parameter someone could stumble into.
+// Returns metadata only; the client pulls bytes per-image from
+// /api/renders/:id/image, which already allows admins.
+users.get('/admin/renders', requireAdmin, (c) => {
+  const limit = Math.min(Math.max(parseInt(c.req.query('limit') || '60', 10) || 60, 1), 200);
+  const offset = Math.max(parseInt(c.req.query('offset') || '0', 10) || 0, 0);
+  const userId = c.req.query('user') || '';
+  const engine = c.req.query('engine') || '';
+  const variation = c.req.query('variation') || '';
+  const q = (c.req.query('q') || '').trim();
+
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (userId) { clauses.push('r.user_id = ?'); params.push(userId); }
+  if (engine === 'openai' || engine === 'gemini') { clauses.push('r.engine = ?'); params.push(engine); }
+  if (variation === 'baseline' || variation === 'tuned' || variation === 'reimagined') {
+    clauses.push('r.variation = ?'); params.push(variation);
+  }
+  // LIKE with escaped wildcards so a user typing % or _ searches literally.
+  if (q) {
+    clauses.push("r.topic LIKE ? ESCAPE '\\'");
+    params.push(`%${q.replace(/[\\%_]/g, m => '\\' + m)}%`);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+
+  const rows = db.prepare(`
+    SELECT r.id, r.topic, r.variation, r.engine, r.visual_rhetoric,
+           r.settings_json, r.source_name, r.created_at, r.project_id,
+           u.email as creator_email, u.name as creator_name
+    FROM renders r
+    JOIN users u ON u.id = r.user_id
+    ${where}
+    ORDER BY r.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset) as Array<{
+    id: string; topic: string; variation: string; engine: string;
+    visual_rhetoric: string | null; settings_json: string; source_name: string | null;
+    created_at: number; project_id: string | null;
+    creator_email: string; creator_name: string | null;
+  }>;
+
+  const total = (db.prepare(
+    `SELECT COUNT(*) as n FROM renders r ${where}`
+  ).get(...params) as { n: number }).n;
+
+  return c.json({
+    total,
+    limit,
+    offset,
+    renders: rows.map(r => ({
+      id: r.id,
+      topic: r.topic,
+      variation: r.variation,
+      engine: r.engine,
+      visual_rhetoric: r.visual_rhetoric,
+      source_name: r.source_name,
+      created_at: r.created_at,
+      project_id: r.project_id,
+      creator_email: r.creator_email,
+      creator_name: r.creator_name,
+      image_url: `/api/renders/${r.id}/image`,
+      // One malformed row must not 500 the whole gallery.
+      settings: (() => { try { return JSON.parse(r.settings_json); } catch { return {}; } })(),
+    })),
+  });
+});
+
 users.get('/users', requireAdmin, (c) => {
   const rows = db.prepare(
     `SELECT id, email, name, password_hash, role, must_change_password,
